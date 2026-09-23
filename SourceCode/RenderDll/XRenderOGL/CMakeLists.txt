@@ -190,3 +190,16 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ${ARCH_LIBS}
     ${SYSTEM_DEPS}
 )
+
+# OpenGL ES 3.0 build of the same renderer, routed through GLES/ (see GLES-PORT-PLAN.md).
+if (NOT MSVC)
+    add_library(XRenderGLES SHARED ${SRC_FILES} GLES/gles_layer.cpp GLES/gles_glu.cpp)
+    target_compile_definitions(XRenderGLES PRIVATE GLES_RENDERER DISABLE_CG)
+    target_include_directories(XRenderGLES PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/SourceCode/CryCommon
+        ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll
+        ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll/Common/Shaders
+    )
+    target_link_libraries(XRenderGLES PRIVATE ${ARCH_LIBS} SDL3)
+endif()

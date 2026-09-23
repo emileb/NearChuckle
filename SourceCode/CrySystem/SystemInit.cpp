@@ -68,6 +68,7 @@ extern HMODULE gDLLHandle;
 #		define DLL_3DENGINE			"libCry3DEngine.so"
 #		define DLL_NULLRENDERER	"libXRenderNULL.so"
 #		define DLL_GLRENDERER "libXRenderOGL.so"
+#		define DLL_GLESRENDERER "libXRenderGLES.so"
 #		define DLL_D3D9RENDERER "libXRenderD3D9.so"
 #else
 #	define DLL_SOUND				"CrySoundSystem.dll"
@@ -81,6 +82,7 @@ extern HMODULE gDLLHandle;
 #	define DLL_3DENGINE			"Cry3DEngine.dll"
 #	define DLL_NULLRENDERER	"XRenderNULL.dll"
 #	define DLL_GLRENDERER "XRenderOGL.dll"
+#	define DLL_GLESRENDERER "XRenderGLES.dll"
 #	define DLL_D3D9RENDERER "XRenderD3D9.dll"
 #endif
 
@@ -139,6 +141,9 @@ bool CSystem::OpenRenderLibrary(const char *t_rend)
 	if (stricmp(t_rend, "OpenGL") == 0)
     return OpenRenderLibrary(R_GL_RENDERER);
   else
+	if (stricmp(t_rend, "GLES") == 0)
+    return OpenRenderLibrary(R_GLES_RENDERER);
+  else
 	if (stricmp(t_rend, "Direct3D8") == 0)
 		return OpenRenderLibrary(R_DX8_RENDERER);
   else
@@ -176,6 +181,9 @@ bool CSystem::OpenRenderLibrary(int type)
 	if (type == R_GL_RENDERER)
 		strcpy(libname, DLL_GLRENDERER);
 	else
+	if (type == R_GLES_RENDERER)
+		strcpy(libname, DLL_GLESRENDERER);
+	else
 	if (type == R_DX8_RENDERER)
 		strcpy(libname, "XRenderD3D8.dll");
   else
@@ -209,7 +217,8 @@ bool CSystem::OpenRenderLibrary(int type)
 		FreeLib(m_dll.hRenderer);
 		return false;
 	}
-	m_pRenderer->SetType(type);
+	// The engine only distinguishes GL from D3D; the ES module behaves as GL.
+	m_pRenderer->SetType(type == R_GLES_RENDERER ? R_GL_RENDERER : type);
 #else
   m_pRenderer = (IRenderer*)PackageRenderConstructor(0, NULL, &sp);
   m_pRenderer->SetType(type);
@@ -453,6 +462,11 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 		m_sSavedRDriver=m_rDriver->GetString();
 		m_rDriver->Set("NULL");
 	}
+	else if(!m_sForcedRDriver.empty())
+	{
+		m_sSavedRDriver=m_rDriver->GetString();
+		m_rDriver->Set(m_sForcedRDriver.c_str());
+	}
 #ifdef LINUX
 	string lib_name(GetModulePath());
 	FILE* fp;
@@ -466,6 +480,11 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 	{
 		real_renderer = true;
 		lib_name += DLL_GLRENDERER;
+	}
+	else if (!stricmp(m_rDriver->GetString(), "GLES"))
+	{
+		real_renderer = true;
+		lib_name += DLL_GLESRENDERER;
 	}
 
 	if (real_renderer)
@@ -482,6 +501,11 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 			{
 				printf("Couldn't find %s, trying Direct3D9 renderer...\n", DLL_GLRENDERER);
 				m_rDriver->Set("Direct3D9");
+			}
+			else if (!stricmp(m_rDriver->GetString(), "GLES"))
+			{
+				printf("Couldn't find %s, trying OpenGL renderer...\n", DLL_GLESRENDERER);
+				m_rDriver->Set("OpenGL");
 			}
 		}
 		else
@@ -1068,6 +1092,14 @@ public:
 		}
 
 		// ----------------------------
+		// e.g. -RENDERER:GLES (OpenGL, GLES, Direct3D9, NULL) without touching the saved r_Driver
+		if(strnicmp(inszArgument,"RENDERER:",9)==0)
+		{
+			m_sRenderer = string(&(inszArgument[9]));
+			return;
+		}
+
+		// ----------------------------
 		// Developer mode on
 		if(stricmp(inszArgument,"DEVMODE")==0)
 		{
@@ -1089,6 +1121,7 @@ public:
 	CSystem &						m_rSystem;				//!< reference to the system
 	string							m_sMod;						//!< -MOD
 	string							m_sLogFile;				//!< -LOGFILE
+	string							m_sRenderer;			//!< -RENDERER
 	bool								m_bDevMode;				//!< -DEVMODE
 	string							m_sLocalIP;				//!<
 	bool								m_bRelaunching;		//!<
@@ -1131,6 +1164,8 @@ bool CSystem::Init( const SSystemInitParams &params )
 	{
 		m_pValidator = params.pValidator;
 	}
+
+	m_sForcedRDriver = CmdlineSink.m_sRenderer;
 
 	if (!params.pLog)
 	{

@@ -16,6 +16,9 @@ static char THIS_FILE[] = __FILE__;
 #include "CG/cgGL.h"
 #include "GLCGVProgram.h"
 #include "GLCGPShader.h"
+#ifdef GLES_RENDERER
+#include "GLES/gles_layer.h"
+#endif
 #ifdef USE_SDL
 #ifdef _WIN32
 #include <SDL_syswm.h>
@@ -179,6 +182,9 @@ void CGLRenderer::FreeLibrary()
 
 bool CGLRenderer::LoadLibrary()
 {
+#ifdef GLES_RENDERER
+  strcpy(m_LibName, "OpenGL ES 3.0 (SDL)");
+#endif
 #ifdef WIN32
   strcpy(m_LibName, "OpenGL32.dll");
 
@@ -233,7 +239,9 @@ void CGLRenderer::FindProc( void*& ProcAddress, char* Name, char* SupportName, b
 {
   if (Name[0] == 'p')
     Name = &Name[1];
-#ifdef WIN32 // FIX_LINUX
+#ifdef GLES_RENDERER
+  ProcAddress = GLES_GetProcAddress(Name);
+#elif defined(WIN32) // FIX_LINUX
   if( !ProcAddress )
     ProcAddress = GetProcAddress( (HINSTANCE)m_hLibHandle, Name );
   if( !ProcAddress )
@@ -1533,6 +1541,9 @@ HWND CGLRenderer::SetMode(int x,int y,int width,int height,unsigned int cbpp, in
     m_width = width;
     m_height = height;
 
+#ifdef GLES_RENDERER
+    GLES_SetContextAttributes();
+#endif
     SDL_Window* win = SDL_CreateWindow(szWinTitle,
         width,
         height,
@@ -1904,6 +1915,10 @@ exr:
       iLog->Log("%s\n", SDL_GetError());
       return NULL;
     }
+#ifdef GLES_RENDERER
+    if (!GLES_Init())
+      return NULL;
+#endif
   }
   else
   {
@@ -2570,6 +2585,9 @@ extern int nAcceptFOpen;
 
 void CGLRenderer::ShutDown(bool bReInit)
 {
+#ifdef GLES_RENDERER
+  GLES_ReportUnimplemented();
+#endif
   int i;
 
   //  CRendElement::mfLogAllREs();

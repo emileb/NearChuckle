@@ -459,6 +459,7 @@ private: // ------------------------------------------------------
 	ICVar *m_sys_StreamCompressionMask;			//!< bitmask, lossy compression, useful for network comunication, should be 0 for load/save
 
 	string	m_sSavedRDriver;								//!< to restore the driver when quitting the dedicated server
+	string	m_sForcedRDriver;								//!< -RENDERER:<name> for this run only; r_Driver is restored on exit
 
 	ICVar* m_cvPakPriority;
 	ICVar* m_cvPakReadSlice;
