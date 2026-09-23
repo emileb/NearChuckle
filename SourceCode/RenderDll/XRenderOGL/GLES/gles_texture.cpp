@@ -201,10 +201,84 @@ static void ApplySwizzle(STextureObj& o, const char* sw)
   o.hasSwizzle = true;
 }
 
+static bool IsS3TC(GLenum f) { return f >= ES_COMPRESSED_RGB_S3TC_DXT1 && f <= ES_COMPRESSED_RGBA_S3TC_DXT5; }
+
+static bool NativeS3TC()
+{
+  static int has = -1;
+  if (has < 0) has = (GLES_HasNativeExt("GL_EXT_texture_compression_s3tc") || GLES_HasNativeExt("GL_ANGLE_texture_compression_dxt")) ? 1 : 0;
+  return has == 1;
+}
+
+// Expand any unsigned-byte source image to tightly packed RGBA.
+static void ToRGBA(int w, int h, GLenum srcFormat, const GLubyte* s, std::vector<GLubyte>& rgba)
+{
+  int sc = SrcChannels(srcFormat);
+  bool bgr = (srcFormat == ES_BGRA_EXT || srcFormat == GL_BGR_EXT);
+  int align = g_es.unpackAlignment;
+  int srcRow = (w * sc + align - 1) / align * align;
+  rgba.resize(w * h * 4);
+  GLubyte* d = &rgba[0];
+  for (int y = 0; y < h; y++)
+  {
+    const GLubyte* sr = s + y * srcRow;
+    for (int x = 0; x < w; x++, sr += sc, d += 4)
+    {
+      switch (sc)
+      {
+        case 1: d[0] = d[1] = d[2] = sr[0]; d[3] = 255; break;
+        case 2: d[0] = d[1] = d[2] = sr[0]; d[3] = sr[1]; break;
+        case 3: d[0] = bgr ? sr[2] : sr[0]; d[1] = sr[1]; d[2] = bgr ? sr[0] : sr[2]; d[3] = 255; break;
+        default: d[0] = bgr ? sr[2] : sr[0]; d[1] = sr[1]; d[2] = bgr ? sr[0] : sr[2]; d[3] = sr[3]; break;
+      }
+    }
+  }
+}
+
 static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid* pixels)
 {
   STextureObj* o = BindForEdit(target);
   if (!o) return;
+  GLenum nativeTargetC = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  // The renderer asks the driver to compress: do it here, so the streamer can read the blocks back.
+  static bool noCompress = getenv("FARCRY_GLES_NOCOMPRESS") != NULL;
+  static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
+  if (IsS3TC(internalFormat) && pixels && type == GL_UNSIGNED_BYTE && SrcChannels(format) > 0 && !noCompress)
+  {
+    if (debug) GLES_Log("GLES: glTexImage2D tex %u level %d %dx%d compress 0x%x from format 0x%x", o->id, level, w, h, internalFormat, format);
+    std::vector<GLubyte> rgba;
+    ToRGBA(w, h, format, (const GLubyte*)pixels, rgba);
+    // ES cannot generate mipmaps of compressed textures: build the chain here when asked.
+    int lw = w, lh = h, lvl = level;
+    for (;;)
+    {
+      std::vector<GLubyte>& blocks = o->compressed[lvl];
+      int size = GLES_CompressDXT(internalFormat, lw, lh, &rgba[0], blocks);
+      if (NativeS3TC())
+        es_glCompressedTexImage2D(nativeTargetC, lvl, internalFormat, lw, lh, 0, size, &blocks[0]);
+      else
+      {
+        es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
+        es_glTexImage2D(nativeTargetC, lvl, ES_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, &rgba[0]);
+        es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+      }
+      if (lvl >= o->levels) o->levels = lvl + 1;
+      if (!(level == 0 && o->generateMipmap) || (lw == 1 && lh == 1)) break;
+      int nw = lw > 1 ? lw / 2 : 1, nh = lh > 1 ? lh / 2 : 1;
+      std::vector<GLubyte> next(nw * nh * 4);
+      for (int y = 0; y < nh; y++)
+        for (int x = 0; x < nw; x++)
+          for (int c = 0; c < 4; c++)
+          {
+            int x0 = x * 2, y0 = y * 2, x1 = lw > 1 ? x0 + 1 : x0, y1 = lh > 1 ? y0 + 1 : y0;
+            next[(y * nw + x) * 4 + c] = (GLubyte)((rgba[(y0 * lw + x0) * 4 + c] + rgba[(y0 * lw + x1) * 4 + c] + rgba[(y1 * lw + x0) * 4 + c] + rgba[(y1 * lw + x1) * 4 + c] + 2) / 4);
+          }
+      rgba.swap(next);
+      lw = nw; lh = nh; lvl++;
+    }
+    if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+    return;
+  }
   SFormat f;
   if (!MapInternalFormat(internalFormat, f))
   {
@@ -222,7 +296,6 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
   const void* data = ConvertPixels(w, h, format, type, pixels, f, converted);
   if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
-  static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
   if (debug) GLES_Log("GLES: glTexImage2D tex %u target 0x%x level %d %dx%d internal 0x%x -> 0x%x format 0x%x -> 0x%x%s", o->id, target, level, w, h, internalFormat, f.internal, format, f.format, converted ? " (converted)" : "");
   es_glTexImage2D(nativeTarget, level, f.internal, w, h, 0, f.format, GL_UNSIGNED_BYTE, data);
   if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
@@ -252,9 +325,22 @@ static void __stdcall gles_glCompressedTexImage2DARB(GLenum target, GLint level,
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  if (data) o->compressed[level].assign((const GLubyte*)data, (const GLubyte*)data + size);
   es_glCompressedTexImage2D(nativeTarget, level, internalFormat, w, h, 0, size, data);
+  if (level == 0 && o->generateMipmap) GLES_Log("GLES: mipmap generation requested for compressed texture %u; not possible on ES", o->id);
   if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
   if (level >= o->levels) o->levels = level + 1;
+}
+
+static void __stdcall gles_glGetCompressedTexImageARB(GLenum target, GLint level, GLvoid* out)
+{
+  STexUnitState& u = g_es.unit[g_es.activeUnit];
+  GLuint id = BoundSlot(u, target);
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
+  if (it == g_esTextures.end()) return;
+  std::map<int, std::vector<GLubyte> >::iterator lv = it->second.compressed.find(level);
+  if (lv == it->second.compressed.end()) { GLES_Log("GLES: glGetCompressedTexImage: no blocks kept for texture %u level %d", id, level); return; }
+  memcpy(out, &lv->second[0], lv->second.size());
 }
 
 static void __stdcall gles_glCompressedTexSubImage2DARB(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLsizei size, const GLvoid* data)
@@ -318,7 +404,11 @@ static void __stdcall gles_glGetTexLevelParameteriv(GLenum target, GLint level, 
     case 0x86A1 /* GL_TEXTURE_COMPRESSED_ARB */: params[0] = (o.internalFormat >= 0x83F0 && o.internalFormat <= 0x83F3); break;
     case 0x86A0 /* GL_TEXTURE_COMPRESSED_IMAGE_SIZE_ARB */:
     {
+      std::map<int, std::vector<GLubyte> >::iterator lv = o.compressed.find(level);
+      if (lv != o.compressed.end()) { params[0] = (GLint)lv->second.size(); break; }
       int bs = (o.internalFormat == ES_COMPRESSED_RGB_S3TC_DXT1 || o.internalFormat == ES_COMPRESSED_RGBA_S3TC_DXT1) ? 8 : 16;
+      if (w < 1) w = 1;
+      if (h < 1) h = 1;
       params[0] = ((w + 3) / 4) * ((h + 3) / 4) * bs;
       break;
     }
@@ -335,6 +425,6 @@ void GLES_RegisterTexture(std::map<std::string, void*>& t)
   REG(glBindTexture) REG(glDeleteTextures) REG(glTexImage2D) REG(glTexSubImage2D)
   REG(glCompressedTexImage2DARB) REG(glCompressedTexSubImage2DARB) REG(glCopyTexSubImage2D)
   REG(glTexParameteri) REG(glTexParameterf) REG(glTexParameteriv) REG(glTexParameterfv)
-  REG(glGetTexLevelParameteriv) REG(glPrioritizeTextures) REG(glAreTexturesResident)
+  REG(glGetTexLevelParameteriv) REG(glPrioritizeTextures) REG(glAreTexturesResident) REG(glGetCompressedTexImageARB)
 #undef REG
 }

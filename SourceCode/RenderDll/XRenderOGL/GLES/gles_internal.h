@@ -68,6 +68,13 @@
 #define ES_VERTEX_PROGRAM_ARB           0x8620
 #define ES_FRAGMENT_PROGRAM_ARB         0x8804
 #define ES_MAX_VERTEX_ATTRIBS           0x8869
+#define ES_ANY_SAMPLES_PASSED           0x8C2F
+#define ES_QUERY_RESULT                 0x8866
+#define ES_QUERY_RESULT_AVAILABLE       0x8867
+#define ES_FRAMEBUFFER                  0x8D40
+#define ES_READ_FRAMEBUFFER             0x8CA8
+#define ES_COLOR_ATTACHMENT0            0x8CE0
+#define ES_FRAMEBUFFER_COMPLETE         0x8CD5
 
 // Native ES entry points used by the layer. Loaded through SDL in GLES_LoadNative().
 #define ES_PROCS \
@@ -130,7 +137,17 @@
   ES_PROC(void, glCopyTexSubImage2D, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei)) \
   ES_PROC(void, glBlendFunc, (GLenum, GLenum)) \
   ES_PROC(void, glDepthMask, (GLboolean)) \
-  ES_PROC(void, glFinish, ())
+  ES_PROC(void, glFinish, ()) \
+  ES_PROC(void, glGenQueries, (GLsizei, GLuint*)) \
+  ES_PROC(void, glDeleteQueries, (GLsizei, const GLuint*)) \
+  ES_PROC(void, glBeginQuery, (GLenum, GLuint)) \
+  ES_PROC(void, glEndQuery, (GLenum)) \
+  ES_PROC(void, glGetQueryObjectuiv, (GLuint, GLenum, GLuint*)) \
+  ES_PROC(void, glGenFramebuffers, (GLsizei, GLuint*)) \
+  ES_PROC(void, glDeleteFramebuffers, (GLsizei, const GLuint*)) \
+  ES_PROC(void, glBindFramebuffer, (GLenum, GLuint)) \
+  ES_PROC(void, glFramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint)) \
+  ES_PROC(GLenum, glCheckFramebufferStatus, (GLenum))
 
 #define ES_PROC(ret, name, params) typedef ret (*PFN_##name) params; extern PFN_##name es_##name;
 ES_PROCS
@@ -198,7 +215,10 @@ struct STextureObj
   int levels;
   bool generateMipmap;
   bool hasSwizzle;
+  std::map<int, std::vector<GLubyte> > compressed;  // per level, for glGetCompressedTexImage
 };
+
+int GLES_CompressDXT(GLenum format, int w, int h, const GLubyte* rgba, std::vector<GLubyte>& out);
 
 #define GLES_MAX_LIGHTS 4
 
@@ -263,6 +283,7 @@ void GLES_RegisterState(std::map<std::string, void*>& t);
 void GLES_RegisterTexture(std::map<std::string, void*>& t);
 void GLES_RegisterVertex(std::map<std::string, void*>& t);
 void GLES_RegisterFFP(std::map<std::string, void*>& t);
+void GLES_RegisterQuery(std::map<std::string, void*>& t);
 
 // Called before every draw: binds the program matching the current state and uploads uniforms.
 // Returns false if nothing can be drawn (no vertex array).

@@ -120,7 +120,6 @@ static const SForward sForwardTable[] = {
   { "glStencilFunc", "glStencilFunc" }, { "glStencilOp", "glStencilOp" }, { "glStencilMask", "glStencilMask" },
   { "glFinish", "glFinish" }, { "glFlush", "glFlush" }, { "glPolygonOffset", "glPolygonOffset" },
   { "glGenTextures", "glGenTextures" }, { "glIsTexture", "glIsTexture" }, { "glLineWidth", "glLineWidth" },
-  { "glReadPixels", "glReadPixels" },
   { NULL, NULL }
 };
 
@@ -135,6 +134,7 @@ static std::map<std::string, void*>& ImplTable()
     GLES_RegisterVertex(table);
     GLES_RegisterFFP(table);
     GLES_RegisterARB(table);
+    GLES_RegisterQuery(table);
   }
   return table;
 }
