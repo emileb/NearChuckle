@@ -1161,6 +1161,25 @@ void CGLRenderer::Update()
 		ScreenShot();
 		CV_r_GetScreenShot = 0;
 	}
+
+#ifdef LINUX
+	// Development aid for renderer comparisons: FARCRY_SCREENSHOT_FRAME=<n> dumps frame n to
+	// FARCRY_SCREENSHOT_FILE; FARCRY_SCREENSHOT_EVERY=<n> dumps every nth frame to <prefix>_<frame>.jpg.
+	{
+		static int nShotFrame = getenv("FARCRY_SCREENSHOT_FRAME") ? atoi(getenv("FARCRY_SCREENSHOT_FRAME")) : -1;
+		static int nEvery = getenv("FARCRY_SCREENSHOT_EVERY") ? atoi(getenv("FARCRY_SCREENSHOT_EVERY")) : 0;
+		static int nFrame = 0;
+		++nFrame;
+		if (nFrame == nShotFrame)
+			ScreenShot(getenv("FARCRY_SCREENSHOT_FILE"));
+		else if (nEvery > 0 && nFrame % nEvery == 0)
+		{
+			char name[256];
+			sprintf(name, "%s_%05d.jpg", getenv("FARCRY_SCREENSHOT_FILE") ? getenv("FARCRY_SCREENSHOT_FILE") : "frame", nFrame);
+			ScreenShot(name);
+		}
+	}
+#endif
 }
 
 extern int BindSizes[];

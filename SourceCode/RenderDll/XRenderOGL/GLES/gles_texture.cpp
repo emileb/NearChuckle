@@ -1,0 +1,336 @@
+/*=============================================================================
+  gles_texture.cpp : texture objects, format conversion, parameters.
+=============================================================================*/
+#include "gles_internal.h"
+
+static GLenum NativeTarget(GLenum target)
+{
+  switch (target)
+  {
+    case GL_TEXTURE_1D: case GL_TEXTURE_2D: case ES_TEXTURE_RECTANGLE_NV: return GL_TEXTURE_2D;
+    case ES_TEXTURE_3D: return ES_TEXTURE_3D;
+    case ES_TEXTURE_CUBE_MAP: return ES_TEXTURE_CUBE_MAP;
+  }
+  if (target >= 0x8515 && target <= 0x851A) return ES_TEXTURE_CUBE_MAP; // cube faces
+  return GL_TEXTURE_2D;
+}
+
+static GLuint& BoundSlot(STexUnitState& u, GLenum target)
+{
+  switch (target)
+  {
+    case GL_TEXTURE_1D: return u.bound1D;
+    case ES_TEXTURE_RECTANGLE_NV: return u.boundRect;
+    case ES_TEXTURE_3D: return u.bound3D;
+    case ES_TEXTURE_CUBE_MAP: return u.boundCube;
+  }
+  if (target >= 0x8515 && target <= 0x851A) return u.boundCube;
+  return u.bound2D;
+}
+
+static STextureObj& Obj(GLuint id, GLenum target)
+{
+  STextureObj& o = g_esTextures[id];
+  if (o.id == 0)
+  {
+    o.id = id;
+    o.target = NativeTarget(target);
+    o.isRect = (target == ES_TEXTURE_RECTANGLE_NV);
+  }
+  return o;
+}
+
+// The texture the renderer means by (active unit, target), bound natively so the following call hits it.
+static STextureObj* BindForEdit(GLenum target)
+{
+  STexUnitState& u = g_es.unit[g_es.activeUnit];
+  GLuint id = BoundSlot(u, target);
+  if (!id) return NULL;
+  STextureObj& o = Obj(id, target);
+  es_glBindTexture(o.target, id);
+  return &o;
+}
+
+STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget)
+{
+  STexUnitState& u = g_es.unit[unit];
+  GLuint id = 0;
+  if (u.enableCube && u.boundCube) { id = u.boundCube; samplerTarget = ES_TEXTURE_CUBE_MAP; }
+  else if (u.enable3D && u.bound3D) { id = u.bound3D; samplerTarget = ES_TEXTURE_3D; }
+  else if (u.enableRect && u.boundRect) { id = u.boundRect; samplerTarget = ES_TEXTURE_RECTANGLE_NV; }
+  else if (u.enable2D && u.bound2D) { id = u.bound2D; samplerTarget = GL_TEXTURE_2D; }
+  else if (u.enable1D && u.bound1D) { id = u.bound1D; samplerTarget = GL_TEXTURE_1D; }
+  if (!id) return NULL;
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
+  return it == g_esTextures.end() ? NULL : &it->second;
+}
+
+static void __stdcall gles_glBindTexture(GLenum target, GLuint id)
+{
+  STexUnitState& u = g_es.unit[g_es.activeUnit];
+  BoundSlot(u, target) = id;
+  if (id) Obj(id, target);
+  es_glBindTexture(NativeTarget(target), id);
+}
+
+static void __stdcall gles_glDeleteTextures(GLsizei n, const GLuint* ids)
+{
+  for (GLsizei i = 0; i < n; i++)
+  {
+    g_esTextures.erase(ids[i]);
+    for (int un = 0; un < GLES_MAX_UNITS; un++)
+    {
+      STexUnitState& u = g_es.unit[un];
+      if (u.bound2D == ids[i]) u.bound2D = 0;
+      if (u.boundRect == ids[i]) u.boundRect = 0;
+      if (u.boundCube == ids[i]) u.boundCube = 0;
+      if (u.bound3D == ids[i]) u.bound3D = 0;
+      if (u.bound1D == ids[i]) u.bound1D = 0;
+    }
+  }
+  es_glDeleteTextures(n, ids);
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Formats
+//////////////////////////////////////////////////////////////////////////
+
+struct SFormat
+{
+  GLenum internal;   // sized ES internal format
+  GLenum format;     // ES upload format
+  int channels;      // channels of the ES upload format
+  const char* swizzle; // NULL or 4 chars of r,g,b,a,0,1
+};
+
+static bool MapInternalFormat(GLenum internalFormat, SFormat& f)
+{
+  f.swizzle = NULL;
+  switch (internalFormat)
+  {
+    case 3: case GL_RGB: case ES_RGB8: case GL_RGB5: case GL_RGB4: case GL_R3_G3_B2: case GL_RGB10: case GL_RGB12: case GL_RGB16:
+    case 0x84ED /* GL_COMPRESSED_RGB_ARB */:
+      f.internal = ES_RGB8; f.format = GL_RGB; f.channels = 3; return true;
+    case 4: case GL_RGBA: case ES_RGBA8: case GL_RGBA4: case GL_RGB5_A1: case GL_RGBA2: case GL_RGB10_A2: case GL_RGBA12: case GL_RGBA16:
+    case 0x84EE /* GL_COMPRESSED_RGBA_ARB */: case ES_BGRA_EXT:
+      f.internal = ES_RGBA8; f.format = GL_RGBA; f.channels = 4; return true;
+    case 1: case GL_LUMINANCE: case GL_LUMINANCE8: case GL_LUMINANCE4: case GL_LUMINANCE12: case GL_LUMINANCE16:
+    case 0x84EA /* GL_COMPRESSED_LUMINANCE_ARB */:
+      f.internal = ES_R8; f.format = ES_RED; f.channels = 1; f.swizzle = "rrr1"; return true;
+    case GL_ALPHA: case GL_ALPHA8: case GL_ALPHA4: case GL_ALPHA12: case GL_ALPHA16:
+    case 0x84E9 /* GL_COMPRESSED_ALPHA_ARB */:
+      f.internal = ES_R8; f.format = ES_RED; f.channels = 1; f.swizzle = "000r"; return true;
+    case GL_INTENSITY: case GL_INTENSITY8: case GL_INTENSITY4: case GL_INTENSITY12: case GL_INTENSITY16:
+      f.internal = ES_R8; f.format = ES_RED; f.channels = 1; f.swizzle = "rrrr"; return true;
+    case 2: case GL_LUMINANCE_ALPHA: case GL_LUMINANCE8_ALPHA8: case GL_LUMINANCE4_ALPHA4: case GL_LUMINANCE6_ALPHA2: case GL_LUMINANCE12_ALPHA4: case GL_LUMINANCE12_ALPHA12: case GL_LUMINANCE16_ALPHA16:
+    case 0x84EB /* GL_COMPRESSED_LUMINANCE_ALPHA_ARB */:
+      f.internal = ES_RG8; f.format = ES_RG; f.channels = 2; f.swizzle = "rrrg"; return true;
+  }
+  return false;
+}
+
+static int SrcChannels(GLenum format)
+{
+  switch (format)
+  {
+    case GL_RGB: case GL_BGR_EXT: return 3;
+    case GL_RGBA: case ES_BGRA_EXT: return 4;
+    case GL_LUMINANCE: case GL_ALPHA: case ES_RED: case GL_INTENSITY: case GL_COLOR_INDEX: return 1;
+    case GL_LUMINANCE_ALPHA: case ES_RG: return 2;
+  }
+  return 0;
+}
+
+// Convert an unsigned-byte image to the ES upload format. Returns NULL if no conversion is needed.
+static std::vector<GLubyte> sConvBuf;
+static const void* ConvertPixels(int w, int h, GLenum srcFormat, GLenum type, const void* pixels, const SFormat& dst, bool& converted)
+{
+  converted = false;
+  if (!pixels || type != GL_UNSIGNED_BYTE) return pixels;
+  int sc = SrcChannels(srcFormat);
+  if (sc == 0) return pixels;
+  bool bgr = (srcFormat == ES_BGRA_EXT || srcFormat == GL_BGR_EXT);
+  if (!bgr && sc == dst.channels) return pixels;
+
+  int align = g_es.unpackAlignment;
+  int srcRow = w * sc;
+  srcRow = (srcRow + align - 1) / align * align;
+  sConvBuf.resize(w * h * dst.channels);
+  const GLubyte* s = (const GLubyte*)pixels;
+  GLubyte* d = &sConvBuf[0];
+  for (int y = 0; y < h; y++)
+  {
+    const GLubyte* sr = s + y * srcRow;
+    for (int x = 0; x < w; x++, sr += sc, d += dst.channels)
+    {
+      GLubyte r = 0, g = 0, b = 0, a = 255;
+      switch (sc)
+      {
+        case 1: r = g = b = sr[0]; if (srcFormat == GL_ALPHA) { a = sr[0]; r = g = b = 0; } break;
+        case 2: r = g = b = sr[0]; a = sr[1]; break;
+        case 3: if (bgr) { r = sr[2]; g = sr[1]; b = sr[0]; } else { r = sr[0]; g = sr[1]; b = sr[2]; } break;
+        case 4: if (bgr) { r = sr[2]; g = sr[1]; b = sr[0]; } else { r = sr[0]; g = sr[1]; b = sr[2]; } a = sr[3]; break;
+      }
+      switch (dst.channels)
+      {
+        case 1: d[0] = (dst.format == ES_RED && srcFormat == GL_ALPHA) ? a : r; break;
+        case 2: d[0] = r; d[1] = a; break;
+        case 3: d[0] = r; d[1] = g; d[2] = b; break;
+        case 4: d[0] = r; d[1] = g; d[2] = b; d[3] = a; break;
+      }
+    }
+  }
+  converted = true;
+  return &sConvBuf[0];
+}
+
+static void ApplySwizzle(STextureObj& o, const char* sw)
+{
+  if (!sw || o.hasSwizzle) return;
+  static const GLenum pn[4] = { ES_TEXTURE_SWIZZLE_R, ES_TEXTURE_SWIZZLE_G, ES_TEXTURE_SWIZZLE_B, ES_TEXTURE_SWIZZLE_A };
+  for (int i = 0; i < 4; i++)
+  {
+    GLint v = GL_RED;
+    switch (sw[i]) { case 'r': v = ES_RED; break; case 'g': v = GL_GREEN; break; case 'b': v = GL_BLUE; break; case 'a': v = GL_ALPHA; break; case '0': v = GL_ZERO; break; case '1': v = GL_ONE; break; }
+    es_glTexParameteri(o.target, pn[i], v);
+  }
+  o.hasSwizzle = true;
+}
+
+static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid* pixels)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  SFormat f;
+  if (!MapInternalFormat(internalFormat, f))
+  {
+    static std::map<GLenum, bool> logged;
+    if (!logged[internalFormat]) { logged[internalFormat] = true; GLES_Log("GLES: glTexImage2D internal format 0x%x unsupported", internalFormat); }
+    return;
+  }
+  if (type != GL_UNSIGNED_BYTE)
+  {
+    static std::map<GLenum, bool> logged;
+    if (!logged[type]) { logged[type] = true; GLES_Log("GLES: glTexImage2D type 0x%x unsupported", type); }
+    return;
+  }
+  bool converted;
+  const void* data = ConvertPixels(w, h, format, type, pixels, f, converted);
+  if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
+  if (debug) GLES_Log("GLES: glTexImage2D tex %u target 0x%x level %d %dx%d internal 0x%x -> 0x%x format 0x%x -> 0x%x%s", o->id, target, level, w, h, internalFormat, f.internal, format, f.format, converted ? " (converted)" : "");
+  es_glTexImage2D(nativeTarget, level, f.internal, w, h, 0, f.format, GL_UNSIGNED_BYTE, data);
+  if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+  ApplySwizzle(*o, f.swizzle);
+  if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+  if (level >= o->levels) o->levels = level + 1;
+  if (level == 0 && o->generateMipmap) es_glGenerateMipmap(o->target);
+}
+
+static void __stdcall gles_glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid* pixels)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o || type != GL_UNSIGNED_BYTE) return;
+  SFormat f;
+  if (!MapInternalFormat(o->internalFormat, f)) return;
+  bool converted;
+  const void* data = ConvertPixels(w, h, format, type, pixels, f, converted);
+  if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  es_glTexSubImage2D(nativeTarget, level, x, y, w, h, f.format, GL_UNSIGNED_BYTE, data);
+  if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+  if (level == 0 && o->generateMipmap) es_glGenerateMipmap(o->target);
+}
+
+static void __stdcall gles_glCompressedTexImage2DARB(GLenum target, GLint level, GLenum internalFormat, GLsizei w, GLsizei h, GLint border, GLsizei size, const GLvoid* data)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  es_glCompressedTexImage2D(nativeTarget, level, internalFormat, w, h, 0, size, data);
+  if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+  if (level >= o->levels) o->levels = level + 1;
+}
+
+static void __stdcall gles_glCompressedTexSubImage2DARB(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLsizei size, const GLvoid* data)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  es_glCompressedTexSubImage2D(nativeTarget, level, x, y, w, h, format, size, data);
+}
+
+static void __stdcall gles_glCopyTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  es_glCopyTexSubImage2D(nativeTarget, level, xo, yo, x, y, w, h);
+}
+
+static void TexParam(GLenum target, GLenum pname, GLint iparam, GLfloat fparam)
+{
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  switch (pname)
+  {
+    case GL_TEXTURE_WRAP_S: case GL_TEXTURE_WRAP_T: case ES_TEXTURE_WRAP_R:
+      if (iparam == GL_CLAMP || iparam == 0x812D /* CLAMP_TO_BORDER */) iparam = GL_CLAMP_TO_EDGE;
+      es_glTexParameteri(o->target, pname, iparam);
+      return;
+    case GL_TEXTURE_MIN_FILTER: case GL_TEXTURE_MAG_FILTER:
+    case GL_TEXTURE_MIN_LOD: case GL_TEXTURE_MAX_LOD: case GL_TEXTURE_BASE_LEVEL: case ES_TEXTURE_MAX_LEVEL:
+      es_glTexParameteri(o->target, pname, iparam);
+      return;
+    case ES_GENERATE_MIPMAP_SGIS:
+      o->generateMipmap = iparam != 0;
+      return;
+    case ES_TEXTURE_MAX_ANISOTROPY:
+      if (GLES_HasNativeExt("GL_EXT_texture_filter_anisotropic")) es_glTexParameterf(o->target, pname, fparam);
+      return;
+    // border colour, priority, LOD bias: nothing to do on ES
+  }
+}
+
+static void __stdcall gles_glTexParameteri(GLenum target, GLenum pname, GLint param) { TexParam(target, pname, param, (GLfloat)param); }
+static void __stdcall gles_glTexParameterf(GLenum target, GLenum pname, GLfloat param) { TexParam(target, pname, (GLint)param, param); }
+static void __stdcall gles_glTexParameteriv(GLenum target, GLenum pname, const GLint* params) { TexParam(target, pname, params[0], (GLfloat)params[0]); }
+static void __stdcall gles_glTexParameterfv(GLenum target, GLenum pname, const GLfloat* params) { TexParam(target, pname, (GLint)params[0], params[0]); }
+
+static void __stdcall gles_glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params)
+{
+  STexUnitState& u = g_es.unit[g_es.activeUnit];
+  GLuint id = BoundSlot(u, target);
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
+  if (it == g_esTextures.end()) { params[0] = 0; return; }
+  STextureObj& o = it->second;
+  int w = o.width >> level, h = o.height >> level;
+  switch (pname)
+  {
+    case GL_TEXTURE_WIDTH:  params[0] = w > 0 ? w : 1; break;
+    case GL_TEXTURE_HEIGHT: params[0] = h > 0 ? h : 1; break;
+    case GL_TEXTURE_INTERNAL_FORMAT: params[0] = o.internalFormat; break;
+    case 0x86A1 /* GL_TEXTURE_COMPRESSED_ARB */: params[0] = (o.internalFormat >= 0x83F0 && o.internalFormat <= 0x83F3); break;
+    case 0x86A0 /* GL_TEXTURE_COMPRESSED_IMAGE_SIZE_ARB */:
+    {
+      int bs = (o.internalFormat == ES_COMPRESSED_RGB_S3TC_DXT1 || o.internalFormat == ES_COMPRESSED_RGBA_S3TC_DXT1) ? 8 : 16;
+      params[0] = ((w + 3) / 4) * ((h + 3) / 4) * bs;
+      break;
+    }
+    default: params[0] = 0; break;
+  }
+}
+
+static void __stdcall gles_glPrioritizeTextures(GLsizei, const GLuint*, const GLclampf*) {}
+static GLboolean __stdcall gles_glAreTexturesResident(GLsizei n, const GLuint*, GLboolean* res) { for (GLsizei i = 0; i < n; i++) res[i] = GL_TRUE; return GL_TRUE; }
+
+void GLES_RegisterTexture(std::map<std::string, void*>& t)
+{
+#define REG(name) t[#name] = (void*)gles_##name;
+  REG(glBindTexture) REG(glDeleteTextures) REG(glTexImage2D) REG(glTexSubImage2D)
+  REG(glCompressedTexImage2DARB) REG(glCompressedTexSubImage2DARB) REG(glCopyTexSubImage2D)
+  REG(glTexParameteri) REG(glTexParameterf) REG(glTexParameteriv) REG(glTexParameterfv)
+  REG(glGetTexLevelParameteriv) REG(glPrioritizeTextures) REG(glAreTexturesResident)
+#undef REG
+}
