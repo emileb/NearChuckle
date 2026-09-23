@@ -21,7 +21,12 @@ struct SFFPKey
   STexEnv env[GLES_MAX_UNITS];
   unsigned char alphaTest, alphaFunc;
   unsigned char fogMode;   // 0 off, 1 linear, 2 exp, 3 exp2
+  unsigned char texGenMode[GLES_MAX_UNITS];  // 0 off, else GL_OBJECT_LINEAR.. as TG_*
+  unsigned char texGenMask[GLES_MAX_UNITS];  // bit per coordinate S,T,R,Q
+  unsigned char lightMask, colorMaterial, clipMask;
 };
+
+enum { TG_OFF = 0, TG_OBJECT, TG_EYE, TG_SPHERE, TG_REFLECTION, TG_NORMAL };
 
 struct SPipeKey
 {
@@ -35,6 +40,9 @@ struct SPipeProgram
   GLuint prog;
   GLint uMVP, uMV, uTexMat[GLES_MAX_UNITS], uEnvColor[GLES_MAX_UNITS], uRectScale[GLES_MAX_UNITS];
   GLint uAlphaRef, uFogColor, uFogParams, uEnvV, uEnvF;
+  GLint uObjPlane, uEyePlane, uClipPlane;
+  GLint uLightPos, uLightAmb, uLightDiff, uLightSpec, uLightAtt;
+  GLint uMatAmb, uMatDiff, uMatSpec, uMatEmis, uShininess, uGlobalAmb;
   int envVCount, envFCount;
 };
 
@@ -107,16 +115,62 @@ static std::string BuildFFPVertex(const SFFPKey& k)
 {
   std::string s = CommonVertexHeader();
   s += "uniform mat4 u_mvp; uniform mat4 u_mv;\n";
-  char buf[128];
+  s += "uniform vec4 u_objPlane[32]; uniform vec4 u_eyePlane[32]; uniform vec4 u_clipPlane[6];\n";
+  s += "uniform vec4 u_lightPos[4]; uniform vec4 u_lightAmb[4]; uniform vec4 u_lightDiff[4]; uniform vec4 u_lightSpec[4]; uniform vec4 u_lightAtt[4];\n";
+  s += "uniform vec4 u_matAmb; uniform vec4 u_matDiff; uniform vec4 u_matSpec; uniform vec4 u_matEmis; uniform float u_shininess; uniform vec4 u_globalAmb;\n";
+  char buf[1024]; // the lighting block below is long
   for (int i = 0; i < GLES_MAX_UNITS; i++) { sprintf(buf, "uniform mat4 u_texMat%d;\n", i); s += buf; }
-  s += "void main(){\n gl_Position = u_mvp * a_pos;\n v_color = a_color; v_color2 = a_color2;\n";
-  s += " v_fogc = -(u_mv * a_pos).z;\n";
+  for (int i = 0; i < 6; i++) if (k.clipMask & (1 << i)) { sprintf(buf, "out float v_clip%d;\n", i); s += buf; }
+  s += "void main(){\n gl_Position = u_mvp * a_pos;\n";
+  s += " vec4 eyePos = u_mv * a_pos;\n vec3 eyeN = normalize(mat3(u_mv) * a_normal.xyz);\n";
+  s += " vec3 eyeU = normalize(eyePos.xyz);\n vec3 refl = eyeU - 2.0 * eyeN * dot(eyeN, eyeU);\n";
+  s += " v_fogc = -eyePos.z;\n v_color2 = a_color2;\n";
+  if (k.lightMask)
+  {
+    s += k.colorMaterial ? " vec4 matAmb = a_color; vec4 matDiff = a_color;\n" : " vec4 matAmb = u_matAmb; vec4 matDiff = u_matDiff;\n";
+    s += " vec3 lit = u_matEmis.rgb + u_globalAmb.rgb * matAmb.rgb;\n";
+    for (int i = 0; i < GLES_MAX_LIGHTS; i++)
+    {
+      if (!(k.lightMask & (1 << i))) continue;
+      sprintf(buf, " {\n  vec3 L; float att = 1.0;\n  if (u_lightPos[%d].w == 0.0) L = normalize(u_lightPos[%d].xyz);\n"
+                   "  else { vec3 d = u_lightPos[%d].xyz - eyePos.xyz; float dist = length(d); L = d / dist; att = 1.0 / (u_lightAtt[%d].x + u_lightAtt[%d].y * dist + u_lightAtt[%d].z * dist * dist); }\n"
+                   "  float ndl = max(dot(eyeN, L), 0.0);\n  vec3 h = normalize(L + vec3(0.0, 0.0, 1.0));\n"
+                   "  float sp = (ndl > 0.0) ? pow(max(dot(eyeN, h), 0.0), u_shininess) : 0.0;\n"
+                   "  lit += att * (u_lightAmb[%d].rgb * matAmb.rgb + ndl * u_lightDiff[%d].rgb * matDiff.rgb + sp * u_lightSpec[%d].rgb * u_matSpec.rgb);\n }\n", i, i, i, i, i, i, i, i, i);
+      s += buf;
+    }
+    s += " v_color = vec4(clamp(lit, 0.0, 1.0), matDiff.a);\n";
+  }
+  else
+    s += " v_color = a_color;\n";
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
-    if (k.texMatrix[i]) sprintf(buf, " v_tex%d = u_texMat%d * a_tex%d;\n", i, i, i);
-    else sprintf(buf, " v_tex%d = a_tex%d;\n", i, i);
+    sprintf(buf, " vec4 tc%d = a_tex%d;\n", i, i); s += buf;
+    if (k.texGenMode[i])
+    {
+      s += " {\n  float m = 2.0 * sqrt(refl.x * refl.x + refl.y * refl.y + (refl.z + 1.0) * (refl.z + 1.0));\n";
+      static const char* comp = "xyzw";
+      for (int c = 0; c < 4; c++)
+      {
+        if (!(k.texGenMask[i] & (1 << c))) continue;
+        switch (k.texGenMode[i])
+        {
+          case TG_OBJECT: sprintf(buf, "  tc%d.%c = dot(u_objPlane[%d], a_pos);\n", i, comp[c], i * 4 + c); break;
+          case TG_EYE:    sprintf(buf, "  tc%d.%c = dot(u_eyePlane[%d], eyePos);\n", i, comp[c], i * 4 + c); break;
+          case TG_SPHERE: sprintf(buf, "  tc%d.%c = refl.%c / m + 0.5;\n", i, comp[c], comp[c < 2 ? c : 0]); break;
+          case TG_REFLECTION: sprintf(buf, "  tc%d.%c = refl.%c;\n", i, comp[c], comp[c < 3 ? c : 2]); break;
+          case TG_NORMAL: sprintf(buf, "  tc%d.%c = eyeN.%c;\n", i, comp[c], comp[c < 3 ? c : 2]); break;
+          default: buf[0] = 0; break;
+        }
+        s += buf;
+      }
+      s += " }\n";
+    }
+    if (k.texMatrix[i]) sprintf(buf, " v_tex%d = u_texMat%d * tc%d;\n", i, i, i);
+    else sprintf(buf, " v_tex%d = tc%d;\n", i, i);
     s += buf;
   }
+  for (int i = 0; i < 6; i++) if (k.clipMask & (1 << i)) { sprintf(buf, " v_clip%d = dot(u_clipPlane[%d], eyePos);\n", i, i); s += buf; }
   s += "}\n";
   return s;
 }
@@ -152,7 +206,10 @@ static std::string BuildFFPFragment(const SFFPKey& k)
     sprintf(buf, "in vec4 v_tex%d; uniform %s u_tex%d;\n", i, UnitSampler(k.unitType[i]), i);
     s += buf;
   }
-  s += "void main(){\n vec4 prev = v_color;\n";
+  for (int i = 0; i < 6; i++) if (k.clipMask & (1 << i)) { sprintf(buf, "in float v_clip%d;\n", i); s += buf; }
+  s += "void main(){\n";
+  for (int i = 0; i < 6; i++) if (k.clipMask & (1 << i)) { sprintf(buf, " if (v_clip%d < 0.0) discard;\n", i); s += buf; }
+  s += " vec4 prev = v_color;\n";
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
     switch (k.unitType[i])
@@ -271,6 +328,20 @@ static SPipeProgram Build(const SPipeKey& k, const SARBProgram* vp, const SARBPr
   p.uFogParams = es_glGetUniformLocation(p.prog, "u_fogParams");
   p.uEnvV = es_glGetUniformLocation(p.prog, "envv");
   p.uEnvF = es_glGetUniformLocation(p.prog, "envf");
+  p.uObjPlane = es_glGetUniformLocation(p.prog, "u_objPlane");
+  p.uEyePlane = es_glGetUniformLocation(p.prog, "u_eyePlane");
+  p.uClipPlane = es_glGetUniformLocation(p.prog, "u_clipPlane");
+  p.uLightPos = es_glGetUniformLocation(p.prog, "u_lightPos");
+  p.uLightAmb = es_glGetUniformLocation(p.prog, "u_lightAmb");
+  p.uLightDiff = es_glGetUniformLocation(p.prog, "u_lightDiff");
+  p.uLightSpec = es_glGetUniformLocation(p.prog, "u_lightSpec");
+  p.uLightAtt = es_glGetUniformLocation(p.prog, "u_lightAtt");
+  p.uMatAmb = es_glGetUniformLocation(p.prog, "u_matAmb");
+  p.uMatDiff = es_glGetUniformLocation(p.prog, "u_matDiff");
+  p.uMatSpec = es_glGetUniformLocation(p.prog, "u_matSpec");
+  p.uMatEmis = es_glGetUniformLocation(p.prog, "u_matEmis");
+  p.uShininess = es_glGetUniformLocation(p.prog, "u_shininess");
+  p.uGlobalAmb = es_glGetUniformLocation(p.prog, "u_globalAmb");
   p.envVCount = vp ? vp->maxEnv : 0;
   p.envFCount = fp ? fp->maxEnv : 0;
   for (int i = 0; i < GLES_MAX_UNITS; i++)
@@ -312,7 +383,31 @@ static void BuildKey(SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
   k.fp = fp ? fp->id : 0;
   SFFPKey& f = k.ffp;
   if (!vp)
-    for (int i = 0; i < GLES_MAX_UNITS; i++) f.texMatrix[i] = g_es.unit[i].texMatrixIdentity ? 0 : 1;
+  {
+    for (int i = 0; i < GLES_MAX_UNITS; i++)
+    {
+      const STexUnitState& u = g_es.unit[i];
+      f.texMatrix[i] = u.texMatrixIdentity ? 0 : 1;
+      for (int c = 0; c < 4; c++) if (u.texGen[c]) f.texGenMask[i] |= (1 << c);
+      if (f.texGenMask[i])
+      {
+        int c = (f.texGenMask[i] & 1) ? 0 : (f.texGenMask[i] & 2) ? 1 : (f.texGenMask[i] & 4) ? 2 : 3;
+        switch (u.texGenMode[c])
+        {
+          case GL_OBJECT_LINEAR: f.texGenMode[i] = TG_OBJECT; break;
+          case GL_EYE_LINEAR:    f.texGenMode[i] = TG_EYE; break;
+          case GL_SPHERE_MAP:    f.texGenMode[i] = TG_SPHERE; break;
+          case 0x8512: case 0x8510: f.texGenMode[i] = TG_REFLECTION; break;  // GL_REFLECTION_MAP_{NV,ARB}
+          case 0x8511: case 0x850F: f.texGenMode[i] = TG_NORMAL; break;      // GL_NORMAL_MAP_{NV,ARB}
+          default: f.texGenMode[i] = TG_OFF; f.texGenMask[i] = 0; break;
+        }
+      }
+    }
+    if (g_es.lighting)
+      for (int i = 0; i < GLES_MAX_LIGHTS; i++) if (g_es.light[i].enabled) f.lightMask |= (1 << i);
+    f.colorMaterial = (g_es.lighting && g_es.colorMaterial) ? 1 : 0;
+    for (int i = 0; i < 6; i++) if (g_es.clipPlane[i]) f.clipMask |= (1 << i);
+  }
   if (!fp)
   {
     for (int i = 0; i < GLES_MAX_UNITS; i++)
@@ -357,6 +452,34 @@ bool GLES_PrepareDraw()
     if (p.uMV >= 0) es_glUniformMatrix4fv(p.uMV, 1, GL_FALSE, g_es.modelview.m[g_es.modelview.depth]);
     for (int i = 0; i < GLES_MAX_UNITS; i++)
       if (k.ffp.texMatrix[i] && p.uTexMat[i] >= 0) es_glUniformMatrix4fv(p.uTexMat[i], 1, GL_FALSE, g_es.unit[i].texMatrix);
+    for (int i = 0; i < GLES_MAX_UNITS; i++)
+    {
+      if (k.ffp.texGenMode[i] == TG_OBJECT && p.uObjPlane >= 0) es_glUniform4fv(p.uObjPlane + i * 4, 4, &g_es.unit[i].texGenPlaneObj[0][0]);
+      if (k.ffp.texGenMode[i] == TG_EYE && p.uEyePlane >= 0) es_glUniform4fv(p.uEyePlane + i * 4, 4, &g_es.unit[i].texGenPlaneEye[0][0]);
+    }
+    if (k.ffp.clipMask && p.uClipPlane >= 0) es_glUniform4fv(p.uClipPlane, 6, &g_es.clipPlaneEq[0][0]);
+    if (k.ffp.lightMask)
+    {
+      float pos[GLES_MAX_LIGHTS][4], amb[GLES_MAX_LIGHTS][4], dif[GLES_MAX_LIGHTS][4], spec[GLES_MAX_LIGHTS][4], att[GLES_MAX_LIGHTS][4];
+      for (int i = 0; i < GLES_MAX_LIGHTS; i++)
+      {
+        const SLightState& l = g_es.light[i];
+        memcpy(pos[i], l.position, 16); memcpy(amb[i], l.ambient, 16); memcpy(dif[i], l.diffuse, 16); memcpy(spec[i], l.specular, 16);
+        att[i][0] = l.attenuation[0]; att[i][1] = l.attenuation[1]; att[i][2] = l.attenuation[2]; att[i][3] = 0;
+      }
+      if (p.uLightPos >= 0) es_glUniform4fv(p.uLightPos, GLES_MAX_LIGHTS, &pos[0][0]);
+      if (p.uLightAmb >= 0) es_glUniform4fv(p.uLightAmb, GLES_MAX_LIGHTS, &amb[0][0]);
+      if (p.uLightDiff >= 0) es_glUniform4fv(p.uLightDiff, GLES_MAX_LIGHTS, &dif[0][0]);
+      if (p.uLightSpec >= 0) es_glUniform4fv(p.uLightSpec, GLES_MAX_LIGHTS, &spec[0][0]);
+      if (p.uLightAtt >= 0) es_glUniform4fv(p.uLightAtt, GLES_MAX_LIGHTS, &att[0][0]);
+      const SMaterialState& m = g_es.material;
+      if (p.uMatAmb >= 0) es_glUniform4fv(p.uMatAmb, 1, m.ambient);
+      if (p.uMatDiff >= 0) es_glUniform4fv(p.uMatDiff, 1, m.diffuse);
+      if (p.uMatSpec >= 0) es_glUniform4fv(p.uMatSpec, 1, m.specular);
+      if (p.uMatEmis >= 0) es_glUniform4fv(p.uMatEmis, 1, m.emission);
+      if (p.uShininess >= 0) es_glUniform1f(p.uShininess, m.shininess);
+      if (p.uGlobalAmb >= 0) es_glUniform4fv(p.uGlobalAmb, 1, g_es.globalAmbient);
+    }
   }
   else if (p.uEnvV >= 0 && p.envVCount > 0)
     es_glUniform4fv(p.uEnvV, p.envVCount, GLES_ARB_Env(true));

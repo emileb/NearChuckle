@@ -200,6 +200,22 @@ struct STextureObj
   bool hasSwizzle;
 };
 
+#define GLES_MAX_LIGHTS 4
+
+struct SLightState
+{
+  bool enabled;
+  float position[4];      // eye space (transformed at glLight time)
+  float ambient[4], diffuse[4], specular[4];
+  float attenuation[3];   // constant, linear, quadratic
+};
+
+struct SMaterialState
+{
+  float ambient[4], diffuse[4], specular[4], emission[4];
+  float shininess;
+};
+
 struct SGLESState
 {
   // matrices
@@ -218,7 +234,11 @@ struct SGLESState
   bool alphaTest; GLenum alphaFunc; float alphaRef;
   bool fog; GLenum fogMode; float fogStart, fogEnd, fogDensity, fogColor[4];
   bool lighting, colorMaterial, normalize;
-  bool clipPlane[6]; double clipPlaneEq[6][4];
+  GLenum colorMaterialMode;
+  SLightState light[GLES_MAX_LIGHTS];
+  SMaterialState material;
+  float globalAmbient[4];
+  bool clipPlane[6]; float clipPlaneEq[6][4];   // eye space (transformed at glClipPlane time)
   bool vertexProgram, fragmentProgram;
   GLuint boundVP, boundFP;
 
@@ -250,6 +270,7 @@ bool GLES_PrepareDraw();
 void GLES_FlushImmediate();
 const float* GLES_CurrentMVP();
 void GLES_MatrixMultiply(const float* a, const float* b, float* out);
+bool GLES_MatrixInvert(const float* m, float* out);
 STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget);
 void GLES_Log(const char* fmt, ...);
 

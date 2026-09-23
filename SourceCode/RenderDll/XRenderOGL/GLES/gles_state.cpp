@@ -26,6 +26,42 @@ void GLES_MatrixMultiply(const float* a, const float* b, float* out)
   memcpy(out, r, sizeof(r));
 }
 
+bool GLES_MatrixInvert(const float* m, float* out)
+{
+  float inv[16];
+  inv[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+  inv[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+  inv[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+  inv[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+  inv[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+  inv[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+  inv[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+  inv[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+  inv[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14]  - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7]  - m[13]*m[3]*m[6];
+  inv[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14]  + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7]  + m[12]*m[3]*m[6];
+  inv[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13]  - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7]  - m[12]*m[3]*m[5];
+  inv[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13]  + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6]  + m[12]*m[2]*m[5];
+  inv[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10]  + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7]   + m[9]*m[3]*m[6];
+  inv[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10]  - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7]   - m[8]*m[3]*m[6];
+  inv[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]   + m[4]*m[1]*m[11] - m[4]*m[3]*m[9]  - m[8]*m[1]*m[7]   + m[8]*m[3]*m[5];
+  inv[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]   - m[4]*m[1]*m[10] + m[4]*m[2]*m[9]  + m[8]*m[1]*m[6]   - m[8]*m[2]*m[5];
+  float det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+  if (det == 0.0f) return false;
+  det = 1.0f / det;
+  for (int i = 0; i < 16; i++) out[i] = inv[i] * det;
+  return true;
+}
+
+// GL stores eye planes and clip planes multiplied by the inverse modelview at call time: p' = p * MV^-1.
+static void PlaneToEye(const float* plane, float* out)
+{
+  float inv[16];
+  const float* mv = g_es.modelview.m[g_es.modelview.depth];
+  if (!GLES_MatrixInvert(mv, inv)) { memcpy(out, plane, 16); return; }
+  for (int j = 0; j < 4; j++)
+    out[j] = plane[0]*inv[j*4+0] + plane[1]*inv[j*4+1] + plane[2]*inv[j*4+2] + plane[3]*inv[j*4+3];
+}
+
 static SMatrixStack& CurStack()
 {
   switch (g_es.matrixMode)
@@ -269,6 +305,7 @@ static void SetCap(GLenum cap, bool on)
     case GL_ALPHA_TEST:            g_es.alphaTest = on; return;
     case GL_FOG:                   g_es.fog = on; return;
     case GL_LIGHTING:              g_es.lighting = on; return;
+    case GL_LIGHT0: case GL_LIGHT0 + 1: case GL_LIGHT0 + 2: case GL_LIGHT0 + 3: g_es.light[cap - GL_LIGHT0].enabled = on; return;
     case GL_COLOR_MATERIAL:        g_es.colorMaterial = on; return;
     case GL_NORMALIZE:             g_es.normalize = on; return;
     case ES_VERTEX_PROGRAM_ARB:    g_es.vertexProgram = on; return;
@@ -370,12 +407,7 @@ static void TexGenSet(GLenum coord, GLenum pname, const float* params)
   {
     case GL_TEXTURE_GEN_MODE: u.texGenMode[c] = (GLenum)params[0]; break;
     case GL_OBJECT_PLANE:     memcpy(u.texGenPlaneObj[c], params, 16); break;
-    case GL_EYE_PLANE:
-    {
-      // Eye planes are stored multiplied by the inverse modelview at call time; keep raw for now.
-      memcpy(u.texGenPlaneEye[c], params, 16);
-      break;
-    }
+    case GL_EYE_PLANE:       PlaneToEye(params, u.texGenPlaneEye[c]); break;
   }
 }
 static void __stdcall gles_glTexGeni(GLenum coord, GLenum pname, GLint param) { float f[4] = {(float)param,0,0,0}; TexGenSet(coord, pname, f); }
@@ -413,8 +445,8 @@ static void __stdcall gles_glClipPlane(GLenum plane, const GLdouble* eq)
 {
   int i = plane - GL_CLIP_PLANE0;
   if (i < 0 || i >= 6) return;
-  // GL transforms the plane by the inverse modelview at call time; the FFP generator handles it in eye space.
-  memcpy(g_es.clipPlaneEq[i], eq, sizeof(double) * 4);
+  float p[4] = { (float)eq[0], (float)eq[1], (float)eq[2], (float)eq[3] };
+  PlaneToEye(p, g_es.clipPlaneEq[i]);
 }
 
 static void __stdcall gles_glClearDepth(GLclampd d) { es_glClearDepthf((GLfloat)d); }
@@ -426,20 +458,63 @@ static void __stdcall gles_glPixelStorei(GLenum pname, GLint param)
   if (pname == ES_UNPACK_ALIGNMENT || pname == ES_PACK_ALIGNMENT) es_glPixelStorei(pname, param);
 }
 
-// No effect on ES, or deferred to a later phase; implemented so they do not count as stubs.
+//////////////////////////////////////////////////////////////////////////
+// Lighting state
+//////////////////////////////////////////////////////////////////////////
+
+static void LightSet(GLenum light, GLenum pname, const float* p)
+{
+  int i = light - GL_LIGHT0;
+  if (i < 0 || i >= GLES_MAX_LIGHTS) return;
+  SLightState& l = g_es.light[i];
+  switch (pname)
+  {
+    case GL_POSITION:
+    {
+      // Stored in eye space: MV * position
+      const float* mv = g_es.modelview.m[g_es.modelview.depth];
+      for (int r = 0; r < 4; r++)
+        l.position[r] = mv[0*4+r]*p[0] + mv[1*4+r]*p[1] + mv[2*4+r]*p[2] + mv[3*4+r]*p[3];
+      break;
+    }
+    case GL_AMBIENT:  memcpy(l.ambient, p, 16); break;
+    case GL_DIFFUSE:  memcpy(l.diffuse, p, 16); break;
+    case GL_SPECULAR: memcpy(l.specular, p, 16); break;
+    case GL_CONSTANT_ATTENUATION:  l.attenuation[0] = p[0]; break;
+    case GL_LINEAR_ATTENUATION:    l.attenuation[1] = p[0]; break;
+    case GL_QUADRATIC_ATTENUATION: l.attenuation[2] = p[0]; break;
+  }
+}
+static void __stdcall gles_glLightfv(GLenum light, GLenum pname, const GLfloat* params) { LightSet(light, pname, params); }
+static void __stdcall gles_glLightf(GLenum light, GLenum pname, GLfloat param) { float p[4] = { param, 0, 0, 0 }; LightSet(light, pname, p); }
+
+static void MaterialSet(GLenum pname, const float* p)
+{
+  SMaterialState& m = g_es.material;
+  switch (pname)
+  {
+    case GL_AMBIENT:  memcpy(m.ambient, p, 16); break;
+    case GL_DIFFUSE:  memcpy(m.diffuse, p, 16); break;
+    case GL_SPECULAR: memcpy(m.specular, p, 16); break;
+    case GL_EMISSION: memcpy(m.emission, p, 16); break;
+    case GL_SHININESS: m.shininess = p[0]; break;
+    case GL_AMBIENT_AND_DIFFUSE: memcpy(m.ambient, p, 16); memcpy(m.diffuse, p, 16); break;
+  }
+}
+static void __stdcall gles_glMaterialfv(GLenum, GLenum pname, const GLfloat* params) { MaterialSet(pname, params); }
+static void __stdcall gles_glMaterialf(GLenum, GLenum pname, GLfloat param) { float p[4] = { param, 0, 0, 0 }; MaterialSet(pname, p); }
+
+static void __stdcall gles_glLightModelfv(GLenum pname, const GLfloat* params) { if (pname == GL_LIGHT_MODEL_AMBIENT) memcpy(g_es.globalAmbient, params, 16); }
+static void __stdcall gles_glLightModeli(GLenum, GLint) {}
+static void __stdcall gles_glLightModelf(GLenum, GLfloat) {}
+static void __stdcall gles_glColorMaterial(GLenum, GLenum mode) { g_es.colorMaterialMode = mode; }
+
+// No effect on ES
 static void __stdcall gles_glShadeModel(GLenum) {}
 static void __stdcall gles_glHint(GLenum, GLenum) {}
 static void __stdcall gles_glDrawBuffer(GLenum) {}
 static void __stdcall gles_glReadBuffer(GLenum) {}
 static void __stdcall gles_glPolygonMode(GLenum, GLenum) {}
-static void __stdcall gles_glLightModelfv(GLenum, const GLfloat*) {}
-static void __stdcall gles_glLightModeli(GLenum, GLint) {}
-static void __stdcall gles_glLightModelf(GLenum, GLfloat) {}
-static void __stdcall gles_glMaterialfv(GLenum, GLenum, const GLfloat*) {}
-static void __stdcall gles_glMaterialf(GLenum, GLenum, GLfloat) {}
-static void __stdcall gles_glLightfv(GLenum, GLenum, const GLfloat*) {}
-static void __stdcall gles_glLightf(GLenum, GLenum, GLfloat) {}
-static void __stdcall gles_glColorMaterial(GLenum, GLenum) {}
 static void __stdcall gles_glPointSize(GLfloat) {}
 
 void GLES_InitState()
@@ -470,6 +545,20 @@ void GLES_InitState()
   g_es.normal[2] = 1.0f;
   g_es.alphaFunc = GL_ALWAYS;
   g_es.fogMode = GL_EXP; g_es.fogEnd = 1.0f; g_es.fogDensity = 1.0f;
+  g_es.colorMaterialMode = GL_AMBIENT_AND_DIFFUSE;
+  for (int i = 0; i < GLES_MAX_LIGHTS; i++)
+  {
+    SLightState& l = g_es.light[i];
+    l.position[2] = 1.0f;
+    l.attenuation[0] = 1.0f;
+    if (i == 0) { l.diffuse[0] = l.diffuse[1] = l.diffuse[2] = l.diffuse[3] = 1.0f; memcpy(l.specular, l.diffuse, 16); }
+    l.ambient[3] = 1.0f;
+  }
+  SMaterialState& m = g_es.material;
+  m.ambient[0] = m.ambient[1] = m.ambient[2] = 0.2f; m.ambient[3] = 1.0f;
+  m.diffuse[0] = m.diffuse[1] = m.diffuse[2] = 0.8f; m.diffuse[3] = 1.0f;
+  m.specular[3] = 1.0f; m.emission[3] = 1.0f;
+  g_es.globalAmbient[0] = g_es.globalAmbient[1] = g_es.globalAmbient[2] = 0.2f; g_es.globalAmbient[3] = 1.0f;
   g_es.mvpDirty = true;
   g_es.unpackAlignment = 4;
 }

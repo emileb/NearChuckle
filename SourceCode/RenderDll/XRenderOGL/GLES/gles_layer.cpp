@@ -145,6 +145,7 @@ bool GLES_Init()
 {
   signal(SIGSEGV, CrashHandler);
   signal(SIGBUS, CrashHandler);
+  signal(SIGABRT, CrashHandler);
   if (!GLES_LoadNative())
     return false;
   GLES_InitState();
