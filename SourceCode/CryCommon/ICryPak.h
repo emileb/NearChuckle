@@ -252,13 +252,13 @@ struct ICryPak
   virtual intptr_t 
   FindFirst(
   const char *pDir, 
-#ifndef __linux
+#ifndef LINUX
   struct _finddata_t *fd
 #else
  struct dirent* fd
 #endif
   )=0;
-#ifndef __linux
+#ifndef LINUX
   virtual int FindNext(intptr_t handle, struct _finddata_t *fd)=0;
 #else
   virtual int FindNext(intptr_t handle, struct dirent* fd)=0;

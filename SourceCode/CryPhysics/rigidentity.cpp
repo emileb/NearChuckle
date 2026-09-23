@@ -2502,7 +2502,7 @@ int CRigidEntity::ReadContacts(CStream &stm, int flags)
 			}
 		}
 		for(i=0;i<nPrevColliders;i++)	{
-			for(j=0;j<m_nColliders && (int)m_pColliders[j]!=idPrevColliders[i];j++);
+			for(j=0;j<m_nColliders && (int)(intptr_t)m_pColliders[j]!=idPrevColliders[i];j++);
 			if (j<m_nColliders)
 				m_pColliderConstraints[j] = iPrevConstraints[i];
 		}
@@ -2543,7 +2543,7 @@ int CRigidEntity::PostSetStateFromSnapshot()
 
 		for(i=contact_mask=0;i<m_nColliders;i++) contact_mask|=m_pColliderContacts[i];
 		for(i=0;i<NMASKBITS;i++) if (contact_mask & getmask(i)) {
-			m_pContacts[i].pent[1] = (CPhysicalEntity*)m_pWorld->GetPhysicalEntityById((int)m_pContacts[i].pent[1]);
+			m_pContacts[i].pent[1] = (CPhysicalEntity*)m_pWorld->GetPhysicalEntityById((int)(intptr_t)m_pContacts[i].pent[1]);
 			if (m_pContacts[i].pent[1] && (unsigned int)m_pContacts[i].ipart[0]<(unsigned int)m_pContacts[i].pent[0]->m_nParts &&
 					(unsigned int)m_pContacts[i].ipart[1]<(unsigned int)m_pContacts[i].pent[1]->m_nParts) 
 			{
@@ -2570,7 +2570,7 @@ int CRigidEntity::PostSetStateFromSnapshot()
 
 		for(i=m_nColliders-1;i>=0;i--) {
 			m_pColliderContacts[i] &= contact_mask;
-			if (!(m_pColliders[i] = (CPhysicalEntity*)m_pWorld->GetPhysicalEntityById((int)m_pColliders[i])) || 
+			if (!(m_pColliders[i] = (CPhysicalEntity*)m_pWorld->GetPhysicalEntityById((int)(intptr_t)m_pColliders[i])) || 
 					!(m_pColliderContacts[i]|m_pColliderConstraints[i])) 
 			{
 				for(j=i;j<m_nColliders;j++) {

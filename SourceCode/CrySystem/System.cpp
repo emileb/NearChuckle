@@ -222,7 +222,7 @@ CSystem::CSystem():
 	m_pSizer = NULL;
 
 	m_pCVarQuit=NULL;
-#ifndef __linux
+#ifndef LINUX
 	m_pDownloadManager = 0;
 #endif
 	// default game MOD is root
@@ -533,7 +533,7 @@ void CSystem::ShutDown(bool bRelaunch)
 	SAFE_DELETE(m_pSizer);
 	SAFE_DELETE(m_pStreamEngine);
 	SAFE_DELETE(m_pDefaultValidator);
-#ifndef __linux
+#ifndef LINUX
 	SAFE_RELEASE(m_pDownloadManager);
 #endif
 	if (m_pLog)
@@ -1097,7 +1097,7 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 		m_pIMusic->Update();
 		m_Time.MeasureTime("MusicSysUp");
 	}
-#ifndef __linux
+#ifndef LINUX
 	if (m_pDownloadManager && !bNoUpdate)
 	{
 		m_pDownloadManager->Update();
@@ -1214,7 +1214,7 @@ void CSystem::VTunePause()
 //////////////////////////////////////////////////////////////////////////
 void CSystem::Deltree(const char *szFolder, bool bRecurse)
 {
-#ifndef __linux
+#ifndef LINUX
 	__finddata64_t fd;
 	string filespec = szFolder;
 	filespec += "*.*";

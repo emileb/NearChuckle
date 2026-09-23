@@ -298,7 +298,7 @@ template <typename F> struct OBB_tpl {
 	//default OBB constructor (without initialisation)
 	inline OBB_tpl() {}
 
-	ILINE void SetOBB( const Matrix33& m33, const Vec3& hlv, const Vec3& center  ) {  m33=m33; h=hlv; c=center;	}
+	ILINE void SetOBB( const Matrix33& _m33, const Vec3& hlv, const Vec3& center  ) {  m33=_m33; h=hlv; c=center;	}
 	ILINE static OBB_tpl<F> CreateOBB( const Matrix33& m33, const Vec3& hlv, const Vec3& center  ) {	OBB_tpl<f32> obb; obb.m33=m33; obb.h=hlv; obb.c=center; return obb;	}
 
 	ILINE void SetOBBfromAABB( const Matrix33& mat33, const AABB& aabb ) {

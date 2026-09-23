@@ -149,7 +149,7 @@ CTexMan::CTexMan()
   }
   for (i=0; i<EFTT_MAX; i++)
   {
-    m_Templates[i].m_eTT = 0;
+    m_Templates[i].m_eTT = eTT_Base;
   }
   for (i = 0; i < MAX_ENVLIGHTCUBEMAPS; i++)
   {
@@ -648,7 +648,7 @@ create:
     ti->m_pSH = NULL;
     ti->m_NextTxt = NULL;
     ti->m_NextCMSide = NULL;
-    ti->m_eTT = 0;
+    ti->m_eTT = eTT_Base;
     ti->m_pPoolItem = NULL;
     ti->m_CubeSide = 0;
     ti->m_AccessFrame = 0;

@@ -97,7 +97,7 @@ bool CSystem::OpenRenderLibrary(const char *t_rend)
 
   int nRenderer = R_DX9_RENDERER;
 
-#ifndef __linux
+#ifndef LINUX
   if (stricmp(t_rend, "NULL") != 0)
   {
     char szVendor[256];
@@ -453,7 +453,7 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 		m_sSavedRDriver=m_rDriver->GetString();
 		m_rDriver->Set("NULL");
 	}
-#ifdef __linux
+#ifdef LINUX
 	string lib_name(GetModulePath());
 	FILE* fp;
 	bool real_renderer = false;
@@ -1174,7 +1174,7 @@ bool CSystem::Init( const SSystemInitParams &params )
 	// FILE SYSTEM
 	//////////////////////////////////////////////////////////////////////////
 
-#if !defined(PS2) && !defined (GC) && !defined (__linux)
+#if !defined(PS2) && !defined (GC) && !defined (LINUX)
   m_pCpu = new CCpuFeatures;
   m_pCpu->Detect();
 #endif
@@ -1380,7 +1380,7 @@ bool CSystem::Init( const SSystemInitParams &params )
 		}
 	}
 
-#ifndef __linux
+#ifndef LINUX
 	m_pDownloadManager = new CDownloadManager;
 	m_pDownloadManager->Create(this);
 #endif

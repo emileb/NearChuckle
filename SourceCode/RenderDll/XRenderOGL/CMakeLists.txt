@@ -175,6 +175,8 @@ if (MSVC)
         "cg.lib"
         "cgGL.lib"
     )
+elseif (APPLE)
+    set(SYSTEM_DEPS "-framework OpenGL")
 else()
     set(SYSTEM_DEPS
         GLU

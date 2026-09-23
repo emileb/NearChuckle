@@ -676,7 +676,7 @@ void CXGame::Save(string sFileName, Vec3d *pos, Vec3d *angles,bool bFirstCheckpo
 
 		// replace / by \ because MakeSureDirectoryPathExists does not work with unix paths
 		size_t pos = 1;
-#ifndef __linux
+#ifndef LINUX
 		for(;;)
 		{
 			pos = sFileName.find_first_of("/", pos);

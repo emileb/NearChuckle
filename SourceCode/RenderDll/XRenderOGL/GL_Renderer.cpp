@@ -381,7 +381,7 @@ void CGLRenderer::ChangeLog()
     {      
       iLog->Log("OpenGL log file '%s' opened\n", "OpenGLLog.txt");
       fprintf(m_LogFile, "\n==========================================\n");
-#ifndef __linux
+#ifndef LINUX
       char time[128];
        char date[128];
       _strtime( time );
@@ -404,7 +404,7 @@ void CGLRenderer::ChangeLog()
   {
     SetLogFuncs(false);
     fprintf(m_LogFile, "\n==========================================\n");
-#ifndef __linux
+#ifndef LINUX
     char time[128];
     char date[128];
     _strtime( time );
@@ -1306,7 +1306,7 @@ void CGLRenderer::GetMemoryUsage(ICrySizer* Sizer)
 
 WIN_HWND CGLRenderer::GetHWND()
 {
-#ifndef __linux
+#ifndef LINUX
   return m_CurrContext ? m_CurrContext->m_Glhwnd : 0;
 #else
   return m_RContexts[0]->m_Window;
@@ -2015,7 +2015,7 @@ void CGLRenderer::SetLodBias(float value)
 ///////////////////////////////////////////
 void CGLRenderer::EnableVSync(bool enable)
 {
-#ifndef __linux
+#ifndef LINUX
   if (wglSwapIntervalEXT)
   {
     if (enable)

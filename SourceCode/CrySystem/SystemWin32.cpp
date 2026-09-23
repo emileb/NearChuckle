@@ -43,7 +43,7 @@
 #include "CrySizerStats.h"
 #include "CrySizerImpl.h"
 
-#ifdef __linux
+#ifdef LINUX
 #include <unistd.h>
 #endif
 
@@ -256,7 +256,7 @@ const char *CSystem::GetUserName()
 	memset(szNameBuffer, 0, 1024);
 
 	DWORD dwSize = 1024;
-#ifndef __linux
+#ifndef LINUX
 	::GetUserName(szNameBuffer, &dwSize);
 #else
 	strncpy(szNameBuffer, getenv("USER"), dwSize);
@@ -829,7 +829,7 @@ bool CSystem::GetSSFileInfo( const char *inszFileName, char *outszInfo, const DW
 
 		// get mastercd directory (like in editor) - can be cleaned up
 		char szMasterCD[_MAX_PATH];
-#ifndef __linux
+#ifndef LINUX
 		GetCurrentDirectory( _MAX_PATH,szMasterCD );
 #else
 		getcwd( szMasterCD, _MAX_PATH );

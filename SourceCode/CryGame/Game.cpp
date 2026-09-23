@@ -1472,7 +1472,7 @@ void CXGame::ProcessPMessages(const char *szMsg)
 //	}
 }
 
-#ifdef __linux
+#ifdef LINUX
 string CXGame::GetCorrectedLevelPath(string in)
 {
 	string ret;
@@ -1567,7 +1567,7 @@ void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szM
 	{
 		// This is just a map name, not a folder.
 		sLevelFolder = GetLevelsFolder() + "/" + sLevelFolder;
-#ifdef __linux
+#ifdef LINUX
 		DIR *fdir;
 
 		fdir = opendir(sLevelFolder.c_str());
@@ -2100,7 +2100,7 @@ ITagPointManager* CXGame::GetTagPointManager()
 
 string CXGame::GetPlayerProfilePath()
 {
-#ifdef __linux
+#ifdef LINUX
 	DIR *fdir;
 	int found_profiles = 0;
 	int found_player = 0;

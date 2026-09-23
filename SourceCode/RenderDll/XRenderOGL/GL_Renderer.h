@@ -38,7 +38,7 @@ The GLRenderer interface Class
 #undef GL_EXT
 #undef GL_PROC
  
-#ifdef __linux
+#ifdef LINUX
 #define glLineWidth cryglLineWidth
 #define glEnable cryglEnable
 #define glDisable cryglDisable

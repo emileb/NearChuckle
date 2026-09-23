@@ -13,7 +13,7 @@
 #define MAX_SOUND_FILENAME 128
 #define MIN_QUEUED_BUFFERS 20
 
-#ifndef __linux
+#ifndef LINUX
 #define __builtin_trap void
 #endif
 

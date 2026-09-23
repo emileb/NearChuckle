@@ -13,7 +13,7 @@
 
 #define _SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS
 
-#ifndef __linux
+#ifndef LINUX
 #include <SDL.h>
 #else
 #include <SDL3/SDL.h>
@@ -41,10 +41,10 @@ void AuthCheckFunction( void *data )
 	// key is 128bit:  int key[4] = {n1,n2,n3,n4};
 	// void encipher(unsigned int *const v,unsigned int *const w,const unsigned int *const k )
 #define TEA_ENCODE( src,trg,len,key ) {\
-	register unsigned int *v = (src), *w = (trg), *k = (key), nlen = (len) >> 3; \
-	register unsigned int delta=0x9E3779B9,a=k[0],b=k[1],c=k[2],d=k[3]; \
+	unsigned int *v = (src), *w = (trg), *k = (key), nlen = (len) >> 3; \
+	unsigned int delta=0x9E3779B9,a=k[0],b=k[1],c=k[2],d=k[3]; \
 	while (nlen--) {\
-	register unsigned int y=v[0],z=v[1],n=32,sum=0; \
+	unsigned int y=v[0],z=v[1],n=32,sum=0; \
 	while(n-->0) { sum += delta; y += (z << 4)+a ^ z+sum ^ (z >> 5)+b; z += (y << 4)+c ^ y+sum ^ (y >> 5)+d; } \
 	w[0]=y; w[1]=z; v+=2,w+=2; }}
 
@@ -53,10 +53,10 @@ void AuthCheckFunction( void *data )
 	// key is 128bit: int key[4] = {n1,n2,n3,n4};
 	// void decipher(unsigned int *const v,unsigned int *const w,const unsigned int *const k)
 #define TEA_DECODE( src,trg,len,key ) {\
-	register unsigned int *v = (src), *w = (trg), *k = (key), nlen = (len) >> 3; \
-	register unsigned int delta=0x9E3779B9,a=k[0],b=k[1],c=k[2],d=k[3]; \
+	unsigned int *v = (src), *w = (trg), *k = (key), nlen = (len) >> 3; \
+	unsigned int delta=0x9E3779B9,a=k[0],b=k[1],c=k[2],d=k[3]; \
 	while (nlen--) { \
-	register unsigned int y=v[0],z=v[1],sum=0xC6EF3720,n=32; \
+	unsigned int y=v[0],z=v[1],sum=0xC6EF3720,n=32; \
 	while(n-->0) { z -= (y << 4)+c ^ y+sum ^ (y >> 5)+d; y -= (z << 4)+a ^ z+sum ^ (z >> 5)+b; sum -= delta; } \
 	w[0]=y; w[1]=z; v+=2,w+=2; }}
 
@@ -104,7 +104,7 @@ static ISystem *g_pISystem=NULL;
 static bool g_bSystemRelaunch = false;
 static char szMasterCDFolder[_MAX_PATH];
 
-static void* g_hSystemHandle=NULL;
+static SDL_SharedObject* g_hSystemHandle=NULL;
 #ifdef _WIN32
 #define DLL_SYSTEM "CrySystem.dll"
 #define DLL_GAME	 "CryGame.dll"
@@ -163,7 +163,7 @@ char * getenv( const char *varname )
 
 void SetMasterCDFolder()
 {
-#ifndef __linux
+#ifndef LINUX
 	char szExeFileName[_MAX_PATH];
 	// Get the path of the executable
 	GetModuleFileName( GetModuleHandle(NULL), szExeFileName, sizeof(szExeFileName));
@@ -262,7 +262,7 @@ void CheckFarCryCD( HINSTANCE hInstance ) {};
 #endif // FARCRY_CD_CHECK_RUSSIAN
 
 ///////////////////////////////////////////////
-#ifndef __linux
+#ifndef LINUX
 int APIENTRY WinMain(HINSTANCE hInstance,
                      HINSTANCE hPrevInstance,
                      LPSTR     lpCmdLine,
@@ -285,7 +285,7 @@ int main(int argc, char** argv)
   // [marco] If a previous instance is running, activate
   // the old one and terminate the new one, depending
 	// on command line devmode status
-#ifndef __linux
+#ifndef LINUX
   HWND hwndPrev;
 	static char szWndClass[] = "CryENGINE";
 	bool bDevMode=false;
@@ -312,7 +312,7 @@ int main(int argc, char** argv)
 		}
 	}
 #endif
-#ifndef __linux
+#ifndef LINUX
 	CheckFarCryCD(hInstance);
 #endif
 	SetMasterCDFolder();
@@ -326,7 +326,7 @@ int main(int argc, char** argv)
 #endif
 	return 0;
 }
-#ifndef __linux
+#ifndef LINUX
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	// Window procedure
@@ -633,7 +633,7 @@ string FormatWinError(DWORD dwError)
 }
 
 #define MAX_CMDLINE_LEN 256
-#ifndef __linux
+#ifndef LINUX
 #include <crtdbg.h>
 #endif
 ///////////////////////////////////////////////
@@ -685,13 +685,13 @@ InvokeExternalConfigTool()
 
 
 //////////////////////////////////////////////////////////////////////////
-#ifndef __linux
+#ifndef LINUX
 bool RunGame(HINSTANCE hInstance,const char *sCmdLine)
 #else
 bool RunGame(int argc, char** argv)
 #endif
 {
-#ifdef __linux
+#ifdef LINUX
 	int i;
 #endif
 	SDL_Init(SDL_INIT_VIDEO);
@@ -705,7 +705,7 @@ bool RunGame(int argc, char** argv)
 
 	char szLocalCmdLine[MAX_CMDLINE_LEN];
 	memset(szLocalCmdLine,0,MAX_CMDLINE_LEN);
-#ifndef __linux
+#ifndef LINUX
 	if (sCmdLine)
 		strncpy(szLocalCmdLine,sCmdLine,MAX_CMDLINE_LEN);
 #else
@@ -765,7 +765,7 @@ bool RunGame(int argc, char** argv)
 		PFNCREATESYSTEMINTERFACE pfnCreateSystemInterface = (PFNCREATESYSTEMINTERFACE)SDL_LoadFunction( g_hSystemHandle,"CreateSystemInterface" );
 
 		// Initialize with instance and window handles.
-#ifndef __linux
+#ifndef LINUX
 		sip.hInstance = hInstance;
 #else
 		sip.hInstance = NULL;

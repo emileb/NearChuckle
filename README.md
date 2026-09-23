@@ -8,7 +8,7 @@ for their work in integrating FFMpeg for Bink video support on their branch.
 
 Binaries are available [here](https://rohitcodes.fyi/nearchuckle/files/).
 
-You need SDL3, OpenAL-Soft, and OpenGL to compile the port. You will also need
+You need SDL3, OpenAL-Soft, and OpenGL to compile the port. For macOS (a development host, not a release target) see [BUILDING-macOS.md](BUILDING-macOS.md). You will also need
 the Nvidia Cg toolkit, which is not included, to compile the OpenGL renderer. You can get it here:
 https://developer.nvidia.com/cg-toolkit-download
 

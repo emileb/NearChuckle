@@ -32,7 +32,23 @@ else()
     if (${ARCH_TYPE} STREQUAL "x64")
         add_definitions(-DLINUX64 -D_AMD64_)
     endif()
+    if (APPLE)
+        add_definitions(-DDARWIN_NO_CARBON)
+        # Modules are dlopen()ed by hard-coded lib*.so names.
+        set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+        set(CMAKE_SHARED_MODULE_SUFFIX ".so")
+        execute_process(COMMAND brew --prefix OUTPUT_VARIABLE BREW_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+        include_directories(SYSTEM ${BREW_PREFIX}/include ${BREW_PREFIX}/opt/openal-soft/include)
+        link_directories(${BREW_PREFIX}/lib ${BREW_PREFIX}/opt/openal-soft/lib)
+        set(DISABLE_CG ON CACHE BOOL "" FORCE)
+        # Modules resolve each other's symbols at dlopen time, as they do on Linux.
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-undefined,dynamic_lookup")
+    endif()
 
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # The tree takes the address of temporaries passed straight to callees; GCC allows it under -fpermissive.
+        add_compile_options(-Wno-address-of-temporary)
+    endif()
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -D_DEBUG -g")
 endif()

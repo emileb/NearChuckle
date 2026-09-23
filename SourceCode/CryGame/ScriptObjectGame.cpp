@@ -1094,7 +1094,7 @@ int CScriptObjectGame::GetLevelList (IFunctionHandler* pH)
 	string sLevelsFolder = m_pGame->GetLevelsFolder();
 	//struct __finddata64_t fd;
 	//intptr_t	hFind;
-#ifndef __linux
+#ifndef LINUX
 	struct _finddata_t c_file;
 #else
 	dirent c_file;
@@ -2684,7 +2684,7 @@ bool SortSaveGame(const SFoundSaveGame &a, const SFoundSaveGame &b)
 int CScriptObjectGame::GetSaveGameList(IFunctionHandler *pH)
 {
 	intptr_t hEnumFile = -1L;
-#ifndef __linux
+#ifndef LINUX
 	struct _finddata_t sFindData;
 #else
 	dirent sFindData;

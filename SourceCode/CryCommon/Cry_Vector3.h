@@ -30,9 +30,9 @@ extern const float gf_PI;
 #define	VEC_EPSILON	( 0.01f )
 #define DEG2RAD( a ) ( (a) * (gf_PI/180.0f) )
 #define RAD2DEG( a ) ( (a) * (180.0f/gf_PI) )
-#ifdef __e2k__
 int isneg(float x);
-#endif
+int isneg(double x);
+int isneg(int x);
 
 #if defined(LINUX)
 template <class F> struct Vec3_tpl;

@@ -83,7 +83,7 @@ LRESULT CUIVideoPanel::Update(unsigned int iMessage, WPARAM wParam, LPARAM lPara
 		else
 		{
 			Stop();
-#ifdef __linux
+#ifdef LINUX
 			// Hack to prevent OnFinished from calling itself again somewhere in Lua, which 
 			// causes issues such as adding StartLevel commands multiple times, or use
 			// after free crashes when completing the final cutscene.
