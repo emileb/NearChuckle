@@ -262,6 +262,18 @@ the translator, against a 46k-line renderer that stays intact until Phase 6.
   frame n so `./FarCry -DEVMODE -RENDERER:GLES '"map pier"'` reaches gameplay
   unattended. The renderer's own `r_Log=3` (system.cfg) writes a full GL call
   trace to `OpenGLLog.txt` on either module.
-- **Next:** Phase 3 (fixed-function completeness: texgen, lighting, clip plane),
-  Phase 4 (shadow maps, depth probes, occlusion queries, `glGetTexImage`),
-  then the screenshot-diff harness.
+- **Phase 3 done (unverified paths).** Fixed-function texgen, lighting and clip planes
+  are generated; the Pier view does not exercise them, so they await a scene that
+  does (vehicle windows use reflection texgen with GL lighting).
+- **Phase 4 partly done.** Occlusion queries, `glGetTexImage`, `glReadPixels`
+  conversions, and CPU S3TC compression with CPU mip chains (needed because the
+  renderer asks the driver to compress and to mipmap, and the texture streamer
+  reads the blocks back). Still open: depth readback (sun/flare probes read
+  1.0 for now), shadow maps through an FBO depth texture, `glCopyTexImage2D`.
+- **Performance.** Pier view: 163 fps on GLES/ANGLE against 188 on the GL
+  renderer, after streaming immediate-mode vertices through an unsynchronized
+  ring VBO (client arrays cost ~100 us per draw on ANGLE) and shadowing
+  attribute, buffer, texture and env-upload state. `FARCRY_FPS_EVERY=n` prints
+  the rate; `FARCRY_GLES_DEBUG` prints per-path timing every 300 frames.
+- **Next:** the screenshot-diff harness (Phase 5), the open Phase 4 items, then
+  Phase 6 and the Android module.

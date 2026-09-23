@@ -350,7 +350,9 @@ static void __stdcall gles_glActiveTextureARB(GLenum tex)
   int unit = tex - ES_TEXTURE0;
   if (unit < 0 || unit >= GLES_MAX_UNITS) return;
   g_es.activeUnit = unit;
+  extern void GLES_NoteActiveUnit(int);
   es_glActiveTexture(tex);
+  GLES_NoteActiveUnit(unit);
 }
 
 static void __stdcall gles_glClientActiveTextureARB(GLenum tex)
@@ -509,10 +511,17 @@ static void __stdcall gles_glLightModeli(GLenum, GLint) {}
 static void __stdcall gles_glLightModelf(GLenum, GLfloat) {}
 static void __stdcall gles_glColorMaterial(GLenum, GLenum mode) { g_es.colorMaterialMode = mode; }
 
+void GLES_ReportTiming();
+// glDrawBuffer is called once per frame by the renderer: a convenient frame tick for the timing report.
+static void __stdcall gles_glDrawBuffer(GLenum)
+{
+  static int frames;
+  if (++frames % 300 == 0) GLES_ReportTiming();
+}
+
 // No effect on ES
 static void __stdcall gles_glShadeModel(GLenum) {}
 static void __stdcall gles_glHint(GLenum, GLenum) {}
-static void __stdcall gles_glDrawBuffer(GLenum) {}
 static void __stdcall gles_glReadBuffer(GLenum) {}
 static void __stdcall gles_glPolygonMode(GLenum, GLenum) {}
 static void __stdcall gles_glPointSize(GLfloat) {}

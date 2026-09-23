@@ -15,6 +15,7 @@ static void __stdcall gles_glEndOcclusionQueryNV() { es_glEndQuery(ES_ANY_SAMPLE
 
 static void __stdcall gles_glGetOcclusionQueryuivNV(GLuint id, GLenum pname, GLuint* params)
 {
+  SESTimer timer(GLES_T_QUERY);
   GLuint v = 0;
   if (pname == 0x8867 /* GL_PIXEL_COUNT_AVAILABLE_NV */) { es_glGetQueryObjectuiv(id, ES_QUERY_RESULT_AVAILABLE, &v); params[0] = v; }
   else { es_glGetQueryObjectuiv(id, ES_QUERY_RESULT, &v); params[0] = v ? GLES_VISIBLE_SAMPLES : 0; }
@@ -76,6 +77,7 @@ static void __stdcall gles_glGetTexImage(GLenum target, GLint level, GLenum form
 // ES 3.0 reads RGBA/UNSIGNED_BYTE from the colour buffer; convert the other formats from that.
 static void __stdcall gles_glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, GLvoid* pixels)
 {
+  SESTimer timer(GLES_T_READPIX);
   if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) { es_glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels); return; }
   if (format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX)
   {

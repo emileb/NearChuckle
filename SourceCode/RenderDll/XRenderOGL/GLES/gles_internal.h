@@ -288,11 +288,29 @@ void GLES_RegisterQuery(std::map<std::string, void*>& t);
 // Called before every draw: binds the program matching the current state and uploads uniforms.
 // Returns false if nothing can be drawn (no vertex array).
 bool GLES_PrepareDraw();
+void GLES_NoteArrayBufferBound(GLuint id);
+// Native texture binding with a per-unit shadow; the shadow is authoritative for what ES has bound.
+void GLES_NativeBindTexture(int unit, GLenum target, GLuint id);
 void GLES_FlushImmediate();
 const float* GLES_CurrentMVP();
 void GLES_MatrixMultiply(const float* a, const float* b, float* out);
 bool GLES_MatrixInvert(const float* m, float* out);
 STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget);
 void GLES_Log(const char* fmt, ...);
+
+// Development timing counters (FARCRY_GLES_DEBUG), reported every 300 frames.
+enum { GLES_T_PREPARE, GLES_T_MAP, GLES_T_QUERY, GLES_T_TEXIMAGE, GLES_T_TEXSUB, GLES_T_COPYTEX, GLES_T_READPIX, GLES_T_IMMEDIATE, GLES_T_DRAWELEM, GLES_T_IMUPLOAD, GLES_T_COUNT };
+#define ES_MAP_UNSYNCHRONIZED_BIT 0x0020
+#define ES_MAP_INVALIDATE_RANGE_BIT 0x0004
+#define ES_MAP_FLUSH_EXPLICIT_BIT 0x0010
+extern double g_esTimers[GLES_T_COUNT];
+extern int g_esCounts[GLES_T_COUNT];
+extern bool g_esDebug;
+struct SESTimer
+{
+  int which; Uint64 t0;
+  SESTimer(int w) : which(w), t0(g_esDebug ? SDL_GetPerformanceCounter() : 0) { g_esCounts[w]++; }
+  ~SESTimer() { if (g_esDebug) g_esTimers[which] += (double)(SDL_GetPerformanceCounter() - t0) / (double)SDL_GetPerformanceFrequency(); }
+};
 
 #endif

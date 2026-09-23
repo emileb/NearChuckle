@@ -1178,6 +1178,15 @@ void CGLRenderer::Update()
 			sprintf(name, "%s_%05d.jpg", getenv("FARCRY_SCREENSHOT_FILE") ? getenv("FARCRY_SCREENSHOT_FILE") : "frame", nFrame);
 			ScreenShot(name);
 		}
+		// FARCRY_FPS_EVERY=<n>: average frame rate over the last n frames, to stderr.
+		static int nFpsEvery = getenv("FARCRY_FPS_EVERY") ? atoi(getenv("FARCRY_FPS_EVERY")) : 0;
+		if (nFpsEvery > 0 && nFrame % nFpsEvery == 0)
+		{
+			static float fLast = 0;
+			float fNow = iTimer->GetAsyncCurTime();
+			if (fLast > 0) fprintf(stderr, "FPS: frame %d, %.1f fps over last %d frames\n", nFrame, nFpsEvery / (fNow - fLast), nFpsEvery);
+			fLast = fNow;
+		}
 	}
 #endif
 }

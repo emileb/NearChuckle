@@ -28,6 +28,23 @@ static GLuint& BoundSlot(STexUnitState& u, GLenum target)
   return u.bound2D;
 }
 
+static GLuint sNativeBound[GLES_MAX_UNITS][4];  // per unit: 2D, cube, 3D, other
+static int sNativeActiveUnit;
+
+static int TargetSlot(GLenum t) { return t == GL_TEXTURE_2D ? 0 : t == ES_TEXTURE_CUBE_MAP ? 1 : t == ES_TEXTURE_3D ? 2 : 3; }
+
+void GLES_NativeBindTexture(int unit, GLenum target, GLuint id)
+{
+  int slot = TargetSlot(target);
+  if (sNativeBound[unit][slot] == id) return;
+  if (sNativeActiveUnit != unit) { es_glActiveTexture(ES_TEXTURE0 + unit); sNativeActiveUnit = unit; }
+  es_glBindTexture(target, id);
+  sNativeBound[unit][slot] = id;
+}
+
+// The renderer's own glActiveTextureARB is forwarded natively; keep the shadow in step.
+void GLES_NoteActiveUnit(int unit) { sNativeActiveUnit = unit; }
+
 static STextureObj& Obj(GLuint id, GLenum target)
 {
   STextureObj& o = g_esTextures[id];
@@ -47,7 +64,7 @@ static STextureObj* BindForEdit(GLenum target)
   GLuint id = BoundSlot(u, target);
   if (!id) return NULL;
   STextureObj& o = Obj(id, target);
-  es_glBindTexture(o.target, id);
+  GLES_NativeBindTexture(g_es.activeUnit, o.target, id);
   return &o;
 }
 
@@ -70,7 +87,7 @@ static void __stdcall gles_glBindTexture(GLenum target, GLuint id)
   STexUnitState& u = g_es.unit[g_es.activeUnit];
   BoundSlot(u, target) = id;
   if (id) Obj(id, target);
-  es_glBindTexture(NativeTarget(target), id);
+  GLES_NativeBindTexture(g_es.activeUnit, NativeTarget(target), id);
 }
 
 static void __stdcall gles_glDeleteTextures(GLsizei n, const GLuint* ids)
@@ -89,6 +106,10 @@ static void __stdcall gles_glDeleteTextures(GLsizei n, const GLuint* ids)
     }
   }
   es_glDeleteTextures(n, ids);
+  for (GLsizei i = 0; i < n; i++)
+    for (int un = 0; un < GLES_MAX_UNITS; un++)
+      for (int s = 0; s < 4; s++)
+        if (sNativeBound[un][s] == ids[i]) sNativeBound[un][s] = 0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -237,6 +258,7 @@ static void ToRGBA(int w, int h, GLenum srcFormat, const GLubyte* s, std::vector
 
 static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint internalFormat, GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const GLvoid* pixels)
 {
+  SESTimer timer(GLES_T_TEXIMAGE);
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTargetC = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
@@ -307,6 +329,7 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
 
 static void __stdcall gles_glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid* pixels)
 {
+  SESTimer timer(GLES_T_TEXSUB);
   STextureObj* o = BindForEdit(target);
   if (!o || type != GL_UNSIGNED_BYTE) return;
   SFormat f;
@@ -353,6 +376,7 @@ static void __stdcall gles_glCompressedTexSubImage2DARB(GLenum target, GLint lev
 
 static void __stdcall gles_glCopyTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h)
 {
+  SESTimer timer(GLES_T_COPYTEX);
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;

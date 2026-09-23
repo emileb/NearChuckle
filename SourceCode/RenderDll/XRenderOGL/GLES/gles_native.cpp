@@ -8,6 +8,9 @@ ES_PROCS
 #undef ES_PROC
 
 static std::string sNativeExt;
+double g_esTimers[GLES_T_COUNT];
+int g_esCounts[GLES_T_COUNT];
+bool g_esDebug = getenv("FARCRY_GLES_DEBUG") != NULL;
 
 bool GLES_LoadNative()
 {

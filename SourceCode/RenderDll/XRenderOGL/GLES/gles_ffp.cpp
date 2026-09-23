@@ -44,6 +44,7 @@ struct SPipeProgram
   GLint uLightPos, uLightAmb, uLightDiff, uLightSpec, uLightAtt;
   GLint uMatAmb, uMatDiff, uMatSpec, uMatEmis, uShininess, uGlobalAmb;
   int envVCount, envFCount;
+  unsigned envVersionV, envVersionF;   // env state version last uploaded
 };
 
 static std::map<SPipeKey, SPipeProgram> sPrograms;
@@ -344,6 +345,7 @@ static SPipeProgram Build(const SPipeKey& k, const SARBProgram* vp, const SARBPr
   p.uGlobalAmb = es_glGetUniformLocation(p.prog, "u_globalAmb");
   p.envVCount = vp ? vp->maxEnv : 0;
   p.envFCount = fp ? fp->maxEnv : 0;
+  p.envVersionV = p.envVersionF = 0;
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
     sprintf(buf, "u_texMat%d", i); p.uTexMat[i] = es_glGetUniformLocation(p.prog, buf);
@@ -431,8 +433,21 @@ static void BuildKey(SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
   f.alphaFunc = (unsigned char)(g_es.alphaFunc - GL_NEVER);
 }
 
+static int sProgramSwitches;
+void GLES_ReportTiming()
+{
+  if (!g_esDebug) return;
+  static const char* names[GLES_T_COUNT] = { "prepare", "map", "query", "teximage", "texsub", "copytex", "readpix", "immediate", "drawelem", "imupload" };
+  std::string s;
+  char buf[96];
+  for (int i = 0; i < GLES_T_COUNT; i++) { sprintf(buf, " %s %d/%.1fms", names[i], g_esCounts[i], g_esTimers[i] * 1000.0); s += buf; g_esCounts[i] = 0; g_esTimers[i] = 0; }
+  GLES_Log("GLES: per 300 frames:%s, %d program switches", s.c_str(), sProgramSwitches);
+  sProgramSwitches = 0;
+}
+
 bool GLES_PrepareDraw()
 {
+  SESTimer timer(GLES_T_PREPARE);
   const SARBProgram* vp = GLES_ARB_Bound(true);
   const SARBProgram* fp = GLES_ARB_Bound(false);
   SPipeKey k;
@@ -444,7 +459,7 @@ bool GLES_PrepareDraw()
     GLES_Log("GLES: program #%d built (vp %u, fp %u)", (int)sPrograms.size(), k.vp, k.fp);
   }
   SPipeProgram& p = it->second;
-  if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; }
+  if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; sProgramSwitches++; }
 
   if (!vp)
   {
@@ -481,10 +496,16 @@ bool GLES_PrepareDraw()
       if (p.uGlobalAmb >= 0) es_glUniform4fv(p.uGlobalAmb, 1, g_es.globalAmbient);
     }
   }
-  else if (p.uEnvV >= 0 && p.envVCount > 0)
+  else if (p.uEnvV >= 0 && p.envVCount > 0 && p.envVersionV != GLES_ARB_EnvVersion(true))
+  {
     es_glUniform4fv(p.uEnvV, p.envVCount, GLES_ARB_Env(true));
-  if (fp && p.uEnvF >= 0 && p.envFCount > 0)
+    p.envVersionV = GLES_ARB_EnvVersion(true);
+  }
+  if (fp && p.uEnvF >= 0 && p.envFCount > 0 && p.envVersionF != GLES_ARB_EnvVersion(false))
+  {
     es_glUniform4fv(p.uEnvF, p.envFCount, GLES_ARB_Env(false));
+    p.envVersionF = GLES_ARB_EnvVersion(false);
+  }
   if (k.ffp.alphaTest && p.uAlphaRef >= 0) es_glUniform1f(p.uAlphaRef, g_es.alphaRef);
   if ((fp && fp->fogMode) || (!fp && k.ffp.fogMode))
   {
@@ -514,12 +535,10 @@ bool GLES_PrepareDraw()
       if (p.uEnvColor[i] >= 0) es_glUniform4fv(p.uEnvColor[i], 1, g_es.unit[i].env.color);
     }
     if (!o) continue;
-    es_glActiveTexture(ES_TEXTURE0 + i);
-    es_glBindTexture(o->target, o->id);
+    GLES_NativeBindTexture(i, o->target, o->id);
     if (rect && p.uRectScale[i] >= 0)
       es_glUniform2f(p.uRectScale[i], o->width ? 1.0f / o->width : 1.0f, o->height ? 1.0f / o->height : 1.0f);
   }
-  es_glActiveTexture(ES_TEXTURE0 + g_es.activeUnit);
 
   static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
   if (debug)

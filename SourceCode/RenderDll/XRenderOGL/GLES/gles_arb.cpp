@@ -6,6 +6,7 @@
 static std::map<GLuint, SARBProgram> sPrograms;
 static GLuint sNextId = 1;
 static float sEnv[2][96][4];   // [vertex ? 0 : 1]
+static unsigned sEnvVersion[2] = { 1, 1 };
 
 static SARBProgram* Find(GLuint id)
 {
@@ -75,7 +76,9 @@ static void SetEnv(GLenum target, GLuint index, const float* v)
 {
   if (index >= 96) return;
   int t = (target == ES_VERTEX_PROGRAM_ARB) ? 0 : 1;
+  if (memcmp(sEnv[t][index], v, 16) == 0) return;
   memcpy(sEnv[t][index], v, 16);
+  sEnvVersion[t]++;
 }
 
 static void __stdcall gles_glProgramEnvParameter4fvARB(GLenum target, GLuint index, const GLfloat* v) { SetEnv(target, index, v); }
@@ -104,6 +107,7 @@ SARBProgram* GLES_ARB_Bound(bool vertex)
 }
 
 const float* GLES_ARB_Env(bool vertex) { return &sEnv[vertex ? 0 : 1][0][0]; }
+unsigned GLES_ARB_EnvVersion(bool vertex) { return sEnvVersion[vertex ? 0 : 1]; }
 int GLES_ARB_EnvCount(bool) { return 96; }
 
 GLuint GLES_ARB_Shader(SARBProgram& p) { return p.shader; }

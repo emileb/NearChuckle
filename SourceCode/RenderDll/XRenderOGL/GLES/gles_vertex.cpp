@@ -99,52 +99,144 @@ static void __stdcall gles_glVertex2d(GLdouble x, GLdouble y) { Emit((float)x, (
 static void __stdcall gles_glVertex3d(GLdouble x, GLdouble y, GLdouble z) { Emit((float)x, (float)y, (float)z, 1); }
 static void __stdcall gles_glVertex3dv(const GLdouble* v) { Emit((float)v[0], (float)v[1], (float)v[2], 1); }
 
-static void SetAttribArrays(const SImVertex* base, int count)
+//////////////////////////////////////////////////////////////////////////
+// Attribute state shadow: ANGLE's per-call cost makes redundant pointer/enable/constant calls the
+// dominant expense, so only changes are issued.
+//////////////////////////////////////////////////////////////////////////
+
+struct SAttribShadow
 {
-  es_glBindBuffer(ES_ARRAY_BUFFER, 0);
+  bool enabled;
+  GLuint buffer; GLint size; GLenum type; GLboolean norm; GLsizei stride; const void* ptr;
+  bool constValid; float constant[4];
+};
+static SAttribShadow sAttr[16];
+static GLuint sBoundArrayBuffer;
+
+static void NativeBindArrayBuffer(GLuint id)
+{
+  if (sBoundArrayBuffer == id) return;
+  sBoundArrayBuffer = id;
+  es_glBindBuffer(ES_ARRAY_BUFFER, id);
+}
+
+static void SetAttribArray(int slot, GLuint buffer, GLint size, GLenum type, GLboolean norm, GLsizei stride, const void* ptr)
+{
+  SAttribShadow& a = sAttr[slot];
+  // Client memory (buffer 0) is read at draw time, so the same pointer with new contents is fine.
+  if (a.enabled && a.buffer == buffer && a.size == size && a.type == type && a.norm == norm && a.stride == stride && a.ptr == ptr)
+    return;
+  NativeBindArrayBuffer(buffer);
+  if (!a.enabled) { es_glEnableVertexAttribArray(slot); a.enabled = true; }
+  es_glVertexAttribPointer(slot, size, type, norm, stride, ptr);
+  a.buffer = buffer; a.size = size; a.type = type; a.norm = norm; a.stride = stride; a.ptr = ptr;
+}
+
+static void SetAttribConstant(int slot, float x, float y, float z, float w)
+{
+  SAttribShadow& a = sAttr[slot];
+  if (a.enabled) { es_glDisableVertexAttribArray(slot); a.enabled = false; }
+  if (a.constValid && a.constant[0] == x && a.constant[1] == y && a.constant[2] == z && a.constant[3] == w) return;
+  es_glVertexAttrib4f(slot, x, y, z, w);
+  a.constValid = true;
+  a.constant[0] = x; a.constant[1] = y; a.constant[2] = z; a.constant[3] = w;
+}
+
+// The renderer's own glBindBufferARB goes through the layer too; keep the shadow in step.
+void GLES_NoteArrayBufferBound(GLuint id) { sBoundArrayBuffer = id; }
+
+// Immediate-mode vertices stream through an orphaned VBO: client arrays cost a buffer allocation
+// per draw on ANGLE. Quads use a static index pattern.
+#define IM_VBO_BYTES (2 * 1024 * 1024)
+#define IM_MAX_QUADS 16000
+static GLuint sImVBO, sImOffset = IM_VBO_BYTES, sQuadIBO;
+
+// Unsynchronized writes into a ring that is orphaned when it wraps: measured on ANGLE at 163 fps against
+// 35 fps for glBufferSubData into the same ring and 124 fps for glBufferData per draw.
+// FARCRY_GLES_IMMODE selects the other two for comparison: 0 subdata, 1 bufferdata per draw.
+static GLuint UploadImmediate(const SImVertex* v, int n)
+{
+  SESTimer timer(GLES_T_IMUPLOAD);
+  static int mode = getenv("FARCRY_GLES_IMMODE") ? atoi(getenv("FARCRY_GLES_IMMODE")) : 2;
+  GLuint bytes = n * sizeof(SImVertex);
+  if (!sImVBO) es_glGenBuffers(1, &sImVBO);
+  NativeBindArrayBuffer(sImVBO);
+  if (mode == 1)
+  {
+    es_glBufferData(ES_ARRAY_BUFFER, bytes, v, ES_STREAM_DRAW);
+    return 0;
+  }
+  if (sImOffset + bytes > IM_VBO_BYTES)
+  {
+    es_glBufferData(ES_ARRAY_BUFFER, IM_VBO_BYTES, NULL, ES_STREAM_DRAW);  // orphan
+    sImOffset = 0;
+  }
+  GLuint off = sImOffset;
+  if (mode == 2)
+  {
+    void* p = es_glMapBufferRange(ES_ARRAY_BUFFER, off, bytes, ES_MAP_WRITE_BIT | ES_MAP_UNSYNCHRONIZED_BIT | ES_MAP_INVALIDATE_RANGE_BIT);
+    if (p) { memcpy(p, v, bytes); es_glUnmapBuffer(ES_ARRAY_BUFFER); }
+    else es_glBufferSubData(ES_ARRAY_BUFFER, off, bytes, v);
+  }
+  else
+    es_glBufferSubData(ES_ARRAY_BUFFER, off, bytes, v);
+  sImOffset += (bytes + 15) & ~15u;
+  return off;
+}
+
+static void BindQuadIndices()
+{
+  if (!sQuadIBO)
+  {
+    std::vector<GLushort> idx(IM_MAX_QUADS * 6);
+    for (int q = 0; q < IM_MAX_QUADS; q++)
+    {
+      GLushort b = (GLushort)(q * 4);
+      idx[q*6+0] = b; idx[q*6+1] = b + 1; idx[q*6+2] = b + 2; idx[q*6+3] = b; idx[q*6+4] = b + 2; idx[q*6+5] = b + 3;
+    }
+    es_glGenBuffers(1, &sQuadIBO);
+    es_glBindBuffer(ES_ELEMENT_ARRAY_BUFFER, sQuadIBO);
+    es_glBufferData(ES_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(GLushort), &idx[0], ES_STATIC_DRAW);
+  }
+  else
+    es_glBindBuffer(ES_ELEMENT_ARRAY_BUFFER, sQuadIBO);
+}
+
+static void SetAttribArrays(const SImVertex* v, int n)
+{
   const GLsizei stride = sizeof(SImVertex);
-  es_glEnableVertexAttribArray(GLES_ATTR_POS);
-  es_glVertexAttribPointer(GLES_ATTR_POS, 4, GL_FLOAT, GL_FALSE, stride, base->pos);
-  es_glEnableVertexAttribArray(GLES_ATTR_NORMAL);
-  es_glVertexAttribPointer(GLES_ATTR_NORMAL, 3, GL_FLOAT, GL_FALSE, stride, base->normal);
-  es_glEnableVertexAttribArray(GLES_ATTR_COLOR);
-  es_glVertexAttribPointer(GLES_ATTR_COLOR, 4, GL_FLOAT, GL_FALSE, stride, base->color);
-  es_glEnableVertexAttribArray(GLES_ATTR_COLOR2);
-  es_glVertexAttribPointer(GLES_ATTR_COLOR2, 3, GL_FLOAT, GL_FALSE, stride, base->color2);
-  for (int i = 0; i < IM_UNITS; i++)
-  {
-    es_glEnableVertexAttribArray(GLES_ATTR_TEX0 + i);
-    es_glVertexAttribPointer(GLES_ATTR_TEX0 + i, 4, GL_FLOAT, GL_FALSE, stride, base->tex[i]);
-  }
+  GLuint off = UploadImmediate(v, n);
+  #define IMOFF(field) ((const void*)(uintptr_t)(off + offsetof(SImVertex, field)))
+  SetAttribArray(GLES_ATTR_POS, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(pos));
+  SetAttribArray(GLES_ATTR_NORMAL, sImVBO, 3, GL_FLOAT, GL_FALSE, stride, IMOFF(normal));
+  SetAttribArray(GLES_ATTR_COLOR, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(color));
+  SetAttribArray(GLES_ATTR_COLOR2, sImVBO, 3, GL_FLOAT, GL_FALSE, stride, IMOFF(color2));
+  SetAttribArray(GLES_ATTR_TEX0 + 0, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(tex[0]));
+  SetAttribArray(GLES_ATTR_TEX0 + 1, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(tex[1]));
+  SetAttribArray(GLES_ATTR_TEX0 + 2, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(tex[2]));
+  SetAttribArray(GLES_ATTR_TEX0 + 3, sImVBO, 4, GL_FLOAT, GL_FALSE, stride, IMOFF(tex[3]));
+  #undef IMOFF
   for (int i = IM_UNITS; i < GLES_MAX_UNITS; i++)
-  {
-    es_glDisableVertexAttribArray(GLES_ATTR_TEX0 + i);
-    es_glVertexAttrib4f(GLES_ATTR_TEX0 + i, 0, 0, 0, 1);
-  }
+    SetAttribConstant(GLES_ATTR_TEX0 + i, 0, 0, 0, 1);
 }
 
 // Quads become an indexed triangle list; the rest map straight onto ES primitives.
 static void DrawImmediate()
 {
+  SESTimer timer(GLES_T_IMMEDIATE);
   int n = (int)sIm.size();
-  static int logged;
-  if (logged < 3) { logged++; GLES_Log("GLES: DrawImmediate mode 0x%x with %d vertices", g_es.beginMode, n); }
   if (n == 0) return;
   GLenum mode = g_es.beginMode;
   if (!GLES_PrepareDraw()) return;
   SetAttribArrays(&sIm[0], n);
-  es_glBindBuffer(ES_ELEMENT_ARRAY_BUFFER, 0);
   switch (mode)
   {
     case GL_QUADS:
     {
-      sIndices.clear();
-      for (int q = 0; q + 3 < n; q += 4)
-      {
-        sIndices.push_back(q); sIndices.push_back(q+1); sIndices.push_back(q+2);
-        sIndices.push_back(q); sIndices.push_back(q+2); sIndices.push_back(q+3);
-      }
-      es_glDrawElements(GL_TRIANGLES, (GLsizei)sIndices.size(), GL_UNSIGNED_SHORT, &sIndices[0]);
+      int quads = n / 4;
+      if (quads > IM_MAX_QUADS) quads = IM_MAX_QUADS;
+      BindQuadIndices();
+      es_glDrawElements(GL_TRIANGLES, quads * 6, GL_UNSIGNED_SHORT, 0);
       break;
     }
     case GL_QUAD_STRIP: es_glDrawArrays(GL_TRIANGLE_STRIP, 0, n); break;
@@ -210,7 +302,7 @@ static void __stdcall gles_glDeleteBuffersARB(GLsizei n, const GLuint* ids)
 }
 static void __stdcall gles_glBindBufferARB(GLenum target, GLuint id)
 {
-  if (target == ES_ARRAY_BUFFER) g_es.arrayBuffer = id;
+  if (target == ES_ARRAY_BUFFER) { g_es.arrayBuffer = id; GLES_NoteArrayBufferBound(id); }
   else if (target == ES_ELEMENT_ARRAY_BUFFER) g_es.elementBuffer = id;
   es_glBindBuffer(target, id);
 }
@@ -223,6 +315,7 @@ static void __stdcall gles_glBufferDataARB(GLenum target, GLsizeiptrARB size, co
 static void __stdcall gles_glBufferSubDataARB(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const GLvoid* data) { es_glBufferSubData(target, offset, size, data); }
 static void* __stdcall gles_glMapBufferARB(GLenum target, GLenum access)
 {
+  SESTimer timer(GLES_T_MAP);
   GLuint id = (target == ES_ARRAY_BUFFER) ? g_es.arrayBuffer : g_es.elementBuffer;
   GLuint size = g_esBuffers[id];
   if (!size) return NULL;
@@ -232,33 +325,25 @@ static GLboolean __stdcall gles_glUnmapBufferARB(GLenum target) { return es_glUn
 static void __stdcall gles_glLockArraysEXT(GLint, GLsizei) {}
 static void __stdcall gles_glUnlockArraysEXT() {}
 
-static void BindArray(int slot, const SESArray& a, bool normalized)
-{
-  if (a.enabled && (a.pointer != NULL || a.buffer != 0))
-  {
-    es_glBindBuffer(ES_ARRAY_BUFFER, a.buffer);
-    es_glEnableVertexAttribArray(slot);
-    es_glVertexAttribPointer(slot, a.size, a.type, normalized, a.stride, a.pointer);
-  }
-  else
-    es_glDisableVertexAttribArray(slot);
-}
+static bool ArrayActive(const SESArray& a) { return a.enabled && (a.pointer != NULL || a.buffer != 0); }
 
 static bool SetupClientArrays()
 {
-  if (!g_es.vertexArray.enabled || (!g_es.vertexArray.pointer && !g_es.vertexArray.buffer)) return false;
-  BindArray(GLES_ATTR_POS, g_es.vertexArray, false);
-  BindArray(GLES_ATTR_NORMAL, g_es.normalArray, true);
-  BindArray(GLES_ATTR_COLOR, g_es.colorArray, true);
-  BindArray(GLES_ATTR_COLOR2, g_es.color2Array, true);
-  for (int i = 0; i < GLES_MAX_UNITS; i++) BindArray(GLES_ATTR_TEX0 + i, g_es.texcoordArray[i], false);
-  if (!g_es.normalArray.enabled) es_glVertexAttrib4f(GLES_ATTR_NORMAL, g_es.normal[0], g_es.normal[1], g_es.normal[2], 0);
-  if (!g_es.colorArray.enabled) es_glVertexAttrib4f(GLES_ATTR_COLOR, g_es.color[0], g_es.color[1], g_es.color[2], g_es.color[3]);
-  if (!g_es.color2Array.enabled) es_glVertexAttrib4f(GLES_ATTR_COLOR2, g_es.color2[0], g_es.color2[1], g_es.color2[2], 0);
+  if (!ArrayActive(g_es.vertexArray)) return false;
+  SetAttribArray(GLES_ATTR_POS, g_es.vertexArray.buffer, g_es.vertexArray.size, g_es.vertexArray.type, GL_FALSE, g_es.vertexArray.stride, g_es.vertexArray.pointer);
+  if (ArrayActive(g_es.normalArray)) SetAttribArray(GLES_ATTR_NORMAL, g_es.normalArray.buffer, 3, g_es.normalArray.type, GL_TRUE, g_es.normalArray.stride, g_es.normalArray.pointer);
+  else SetAttribConstant(GLES_ATTR_NORMAL, g_es.normal[0], g_es.normal[1], g_es.normal[2], 0);
+  if (ArrayActive(g_es.colorArray)) SetAttribArray(GLES_ATTR_COLOR, g_es.colorArray.buffer, g_es.colorArray.size, g_es.colorArray.type, GL_TRUE, g_es.colorArray.stride, g_es.colorArray.pointer);
+  else SetAttribConstant(GLES_ATTR_COLOR, g_es.color[0], g_es.color[1], g_es.color[2], g_es.color[3]);
+  if (ArrayActive(g_es.color2Array)) SetAttribArray(GLES_ATTR_COLOR2, g_es.color2Array.buffer, g_es.color2Array.size, g_es.color2Array.type, GL_TRUE, g_es.color2Array.stride, g_es.color2Array.pointer);
+  else SetAttribConstant(GLES_ATTR_COLOR2, g_es.color2[0], g_es.color2[1], g_es.color2[2], 0);
   for (int i = 0; i < GLES_MAX_UNITS; i++)
-    if (!g_es.texcoordArray[i].enabled)
-      es_glVertexAttrib4f(GLES_ATTR_TEX0 + i, g_es.texcoord[i][0], g_es.texcoord[i][1], g_es.texcoord[i][2], g_es.texcoord[i][3]);
-  es_glBindBuffer(ES_ARRAY_BUFFER, g_es.arrayBuffer);
+  {
+    const SESArray& t = g_es.texcoordArray[i];
+    if (ArrayActive(t)) SetAttribArray(GLES_ATTR_TEX0 + i, t.buffer, t.size, t.type, GL_FALSE, t.stride, t.pointer);
+    else SetAttribConstant(GLES_ATTR_TEX0 + i, g_es.texcoord[i][0], g_es.texcoord[i][1], g_es.texcoord[i][2], g_es.texcoord[i][3]);
+  }
+  NativeBindArrayBuffer(g_es.arrayBuffer);
   return true;
 }
 
@@ -290,6 +375,7 @@ static const void* ExpandQuads(GLsizei count, GLenum type, const void* indices, 
 
 static void __stdcall gles_glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices)
 {
+  SESTimer timer(GLES_T_DRAWELEM);
   if (!SetupClientArrays()) return;
   if (!GLES_PrepareDraw()) return;
   es_glBindBuffer(ES_ELEMENT_ARRAY_BUFFER, g_es.elementBuffer);

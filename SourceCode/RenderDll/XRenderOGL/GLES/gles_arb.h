@@ -26,6 +26,7 @@ struct SARBProgram
 SARBProgram* GLES_ARB_Bound(bool vertex);      // bound and enabled program, NULL otherwise
 GLuint GLES_ARB_Shader(SARBProgram& p);         // compiled shader object (compiles on first use)
 const float* GLES_ARB_Env(bool vertex);          // env parameter array
+unsigned GLES_ARB_EnvVersion(bool vertex);       // incremented on every env change (never 0)
 int GLES_ARB_EnvCount(bool vertex);
 void GLES_RegisterARB(std::map<std::string, void*>& t);
 
