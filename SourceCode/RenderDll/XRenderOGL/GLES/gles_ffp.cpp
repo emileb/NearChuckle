@@ -1,12 +1,19 @@
 /*=============================================================================
-  gles_ffp.cpp : fixed-function emulation. Generates a GLSL ES 3.00 program
-  for the current texenv / alpha test / fog state and binds it before a draw.
+  gles_ffp.cpp : per-draw program selection. Pairs the vertex and fragment
+  halves (ARB program translated by gles_arb_translate.cpp, or a generated
+  fixed-function half) into a GLSL ES 3.00 program and uploads its uniforms.
+
+  Interface shared by all halves:
+    attributes a_pos, a_normal, a_color, a_color2, a_texN (vec4)
+    varyings   v_color, v_color2, v_texN (vec4), v_fogc (float)
 =============================================================================*/
 #include "gles_internal.h"
+#include "gles_arb.h"
 #include <stdio.h>
 
 enum { UNIT_OFF = 0, UNIT_2D, UNIT_RECT, UNIT_CUBE, UNIT_3D };
 
+// Fixed-function state a generated half depends on.
 struct SFFPKey
 {
   unsigned char unitType[GLES_MAX_UNITS];
@@ -14,19 +21,25 @@ struct SFFPKey
   STexEnv env[GLES_MAX_UNITS];
   unsigned char alphaTest, alphaFunc;
   unsigned char fogMode;   // 0 off, 1 linear, 2 exp, 3 exp2
-
-  bool operator<(const SFFPKey& o) const { return memcmp(this, &o, sizeof(*this)) < 0; }
 };
 
-struct SFFPProgram
+struct SPipeKey
+{
+  GLuint vp, fp;           // ARB program ids, 0 = fixed function half
+  SFFPKey ffp;
+  bool operator<(const SPipeKey& o) const { return memcmp(this, &o, sizeof(*this)) < 0; }
+};
+
+struct SPipeProgram
 {
   GLuint prog;
-  GLint uMVP, uTexMat[GLES_MAX_UNITS], uEnvColor[GLES_MAX_UNITS], uRectScale[GLES_MAX_UNITS];
-  GLint uAlphaRef, uFogColor, uFogParams, uMV;
+  GLint uMVP, uMV, uTexMat[GLES_MAX_UNITS], uEnvColor[GLES_MAX_UNITS], uRectScale[GLES_MAX_UNITS];
+  GLint uAlphaRef, uFogColor, uFogParams, uEnvV, uEnvF;
+  int envVCount, envFCount;
 };
 
-static std::map<SFFPKey, SFFPProgram> sPrograms;
-static SFFPProgram* sCurrent;
+static std::map<SPipeKey, SPipeProgram> sPrograms;
+static std::map<std::string, GLuint> sShaders;   // compiled shader per source text
 static GLuint sCurrentProg;
 
 static const char* UnitSampler(int type)
@@ -34,7 +47,11 @@ static const char* UnitSampler(int type)
   switch (type) { case UNIT_CUBE: return "samplerCube"; case UNIT_3D: return "sampler3D"; default: return "sampler2D"; }
 }
 
-static void AppendArg(std::string& s, const SFFPKey& k, int unit, GLenum src, GLenum op, bool alpha)
+//////////////////////////////////////////////////////////////////////////
+// Fixed-function halves
+//////////////////////////////////////////////////////////////////////////
+
+static void AppendArg(std::string& s, int unit, GLenum src, GLenum op, bool alpha)
 {
   char buf[64];
   std::string v;
@@ -53,10 +70,10 @@ static void AppendArg(std::string& s, const SFFPKey& k, int unit, GLenum src, GL
   }
 }
 
-static void AppendCombine(std::string& s, const SFFPKey& k, int unit, GLenum func, const GLenum* src, const GLenum* op, float scale, bool alpha)
+static void AppendCombine(std::string& s, int unit, GLenum func, const GLenum* src, const GLenum* op, float scale, bool alpha)
 {
   std::string a[3];
-  for (int i = 0; i < 3; i++) AppendArg(a[i], k, unit, src[i], op[i], alpha);
+  for (int i = 0; i < 3; i++) AppendArg(a[i], unit, src[i], op[i], alpha);
   std::string r;
   switch (func)
   {
@@ -75,24 +92,27 @@ static void AppendCombine(std::string& s, const SFFPKey& k, int unit, GLenum fun
   s += r;
 }
 
-static std::string BuildVertexShader(const SFFPKey& k)
+static std::string CommonVertexHeader()
 {
   std::string s = "#version 300 es\n";
-  s += "in vec4 a_pos; in vec4 a_color; in vec3 a_normal; in vec3 a_color2;\n";
+  s += "in vec4 a_pos; in vec4 a_color; in vec4 a_normal; in vec4 a_color2;\n";
+  s += "out vec4 v_color; out vec4 v_color2; out float v_fogc;\n";
+  char buf[96];
+  for (int i = 0; i < GLES_MAX_UNITS; i++) { sprintf(buf, "in vec4 a_tex%d; out vec4 v_tex%d;\n", i, i); s += buf; }
+  return s;
+}
+
+// Transforms with the matrix stacks; writes every varying so any fragment half can link against it.
+static std::string BuildFFPVertex(const SFFPKey& k)
+{
+  std::string s = CommonVertexHeader();
   s += "uniform mat4 u_mvp; uniform mat4 u_mv;\n";
-  s += "out vec4 v_color; out vec3 v_color2; out float v_eyez;\n";
-  char buf[256];
-  for (int i = 0; i < GLES_MAX_UNITS; i++)
-  {
-    if (k.unitType[i] == UNIT_OFF) continue;
-    sprintf(buf, "in vec4 a_tex%d; out vec4 v_tex%d; uniform mat4 u_texMat%d;\n", i, i, i);
-    s += buf;
-  }
+  char buf[128];
+  for (int i = 0; i < GLES_MAX_UNITS; i++) { sprintf(buf, "uniform mat4 u_texMat%d;\n", i); s += buf; }
   s += "void main(){\n gl_Position = u_mvp * a_pos;\n v_color = a_color; v_color2 = a_color2;\n";
-  s += " v_eyez = -(u_mv * a_pos).z;\n";
+  s += " v_fogc = -(u_mv * a_pos).z;\n";
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
-    if (k.unitType[i] == UNIT_OFF) continue;
     if (k.texMatrix[i]) sprintf(buf, " v_tex%d = u_texMat%d * a_tex%d;\n", i, i, i);
     else sprintf(buf, " v_tex%d = a_tex%d;\n", i, i);
     s += buf;
@@ -101,10 +121,28 @@ static std::string BuildVertexShader(const SFFPKey& k)
   return s;
 }
 
-static std::string BuildFragmentShader(const SFFPKey& k)
+static std::string AlphaTestCode(const SFFPKey& k, const char* var)
+{
+  if (!k.alphaTest) return "";
+  const char* cmp = "true";
+  char buf[64];
+  switch (k.alphaFunc + GL_NEVER)
+  {
+    case GL_NEVER: cmp = "false"; break;
+    case GL_LESS: sprintf(buf, "%s.a < u_alphaRef", var); cmp = buf; break;
+    case GL_EQUAL: sprintf(buf, "%s.a == u_alphaRef", var); cmp = buf; break;
+    case GL_LEQUAL: sprintf(buf, "%s.a <= u_alphaRef", var); cmp = buf; break;
+    case GL_GREATER: sprintf(buf, "%s.a > u_alphaRef", var); cmp = buf; break;
+    case GL_NOTEQUAL: sprintf(buf, "%s.a != u_alphaRef", var); cmp = buf; break;
+    case GL_GEQUAL: sprintf(buf, "%s.a >= u_alphaRef", var); cmp = buf; break;
+  }
+  return std::string(" if (!(") + cmp + ")) discard;\n";
+}
+
+static std::string BuildFFPFragment(const SFFPKey& k)
 {
   std::string s = "#version 300 es\nprecision highp float;\nprecision highp sampler3D;\n";
-  s += "in vec4 v_color; in vec3 v_color2; in float v_eyez;\n";
+  s += "in vec4 v_color; in vec4 v_color2; in float v_fogc;\n";
   s += "uniform vec4 u_envColor[8]; uniform vec2 u_rectScale[8]; uniform float u_alphaRef;\n";
   s += "uniform vec4 u_fogColor; uniform vec4 u_fogParams;\nout vec4 fragColor;\n";
   char buf[256];
@@ -115,15 +153,13 @@ static std::string BuildFragmentShader(const SFFPKey& k)
     s += buf;
   }
   s += "void main(){\n vec4 prev = v_color;\n";
-  // Sample every enabled unit first so crossbar sources (TEXTUREn) can reference them.
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
     switch (k.unitType[i])
     {
       case UNIT_2D:   sprintf(buf, " vec4 t%d = textureProj(u_tex%d, vec3(v_tex%d.xy, v_tex%d.w));\n", i, i, i, i); break;
       case UNIT_RECT: sprintf(buf, " vec4 t%d = texture(u_tex%d, v_tex%d.xy / v_tex%d.w * u_rectScale[%d]);\n", i, i, i, i, i); break;
-      case UNIT_CUBE: sprintf(buf, " vec4 t%d = texture(u_tex%d, v_tex%d.xyz);\n", i, i, i); break;
-      case UNIT_3D:   sprintf(buf, " vec4 t%d = texture(u_tex%d, v_tex%d.xyz);\n", i, i, i); break;
+      case UNIT_CUBE: case UNIT_3D: sprintf(buf, " vec4 t%d = texture(u_tex%d, v_tex%d.xyz);\n", i, i, i); break;
       default: continue;
     }
     s += buf;
@@ -133,13 +169,12 @@ static std::string BuildFragmentShader(const SFFPKey& k)
     if (k.unitType[i] == UNIT_OFF) continue;
     const STexEnv& e = k.env[i];
     sprintf(buf, "t%d", i);
-    std::string t = buf;
-    std::string rgb, a;
+    std::string t = buf, rgb, a;
     if (e.mode == ES_COMBINE)
     {
-      AppendCombine(rgb, k, i, e.combineRGB, e.srcRGB, e.opRGB, e.scaleRGB, false);
+      AppendCombine(rgb, i, e.combineRGB, e.srcRGB, e.opRGB, e.scaleRGB, false);
       if (e.combineRGB == ES_DOT3_RGBA) a = "(" + rgb + ").r";
-      else AppendCombine(a, k, i, e.combineAlpha, e.srcAlpha, e.opAlpha, e.scaleAlpha, true);
+      else AppendCombine(a, i, e.combineAlpha, e.srcAlpha, e.opAlpha, e.scaleAlpha, true);
     }
     else switch (e.mode)
     {
@@ -152,35 +187,37 @@ static std::string BuildFragmentShader(const SFFPKey& k)
     s += " prev = clamp(vec4(" + rgb + ", " + a + "), 0.0, 1.0);\n";
   }
   s += " vec4 c = prev;\n";
-  if (k.fogMode)
-  {
-    if (k.fogMode == 1) s += " float f = clamp((u_fogParams.y - v_eyez) * u_fogParams.z, 0.0, 1.0);\n";
-    else if (k.fogMode == 2) s += " float f = clamp(exp(-u_fogParams.w * v_eyez), 0.0, 1.0);\n";
-    else s += " float f = clamp(exp(-u_fogParams.w * u_fogParams.w * v_eyez * v_eyez), 0.0, 1.0);\n";
-    s += " c.rgb = mix(u_fogColor.rgb, c.rgb, f);\n";
-  }
-  if (k.alphaTest)
-  {
-    const char* cmp = NULL;
-    switch (k.alphaFunc)
-    {
-      case GL_NEVER: cmp = "false"; break;
-      case GL_LESS: cmp = "c.a < u_alphaRef"; break;
-      case GL_EQUAL: cmp = "c.a == u_alphaRef"; break;
-      case GL_LEQUAL: cmp = "c.a <= u_alphaRef"; break;
-      case GL_GREATER: cmp = "c.a > u_alphaRef"; break;
-      case GL_NOTEQUAL: cmp = "c.a != u_alphaRef"; break;
-      case GL_GEQUAL: cmp = "c.a >= u_alphaRef"; break;
-      default: cmp = "true"; break;
-    }
-    s += std::string(" if (!(") + cmp + ")) discard;\n";
-  }
+  if (k.fogMode == 1) s += " float f = clamp((u_fogParams.y - v_fogc) * u_fogParams.z, 0.0, 1.0);\n c.rgb = mix(u_fogColor.rgb, c.rgb, f);\n";
+  else if (k.fogMode == 2) s += " float f = clamp(exp(-u_fogParams.w * v_fogc), 0.0, 1.0);\n c.rgb = mix(u_fogColor.rgb, c.rgb, f);\n";
+  else if (k.fogMode == 3) s += " float f = clamp(exp(-u_fogParams.w * u_fogParams.w * v_fogc * v_fogc), 0.0, 1.0);\n c.rgb = mix(u_fogColor.rgb, c.rgb, f);\n";
+  s += AlphaTestCode(k, "c");
   s += " fragColor = c;\n}\n";
   return s;
 }
 
+// The GL alpha test still applies after an ARB fragment program.
+static std::string ARBFragmentWithAlphaTest(const SARBProgram& fp, const SFFPKey& k)
+{
+  std::string s = fp.glsl;
+  if (!k.alphaTest) return s;
+  size_t pos = s.find("  fragColor = oColor;");
+  if (pos == std::string::npos) return s;
+  std::string inject = "uniform float u_alphaRef;\n";
+  size_t hdr = s.find("out vec4 fragColor;");
+  s.insert(hdr, inject);
+  pos = s.find("  fragColor = oColor;");
+  s.insert(pos, AlphaTestCode(k, "oColor"));
+  return s;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Compile and link
+//////////////////////////////////////////////////////////////////////////
+
 static GLuint Compile(GLenum type, const std::string& src)
 {
+  std::map<std::string, GLuint>::iterator it = sShaders.find(src);
+  if (it != sShaders.end()) return it->second;
   GLuint sh = es_glCreateShader(type);
   const char* p = src.c_str();
   es_glShaderSource(sh, 1, &p, NULL);
@@ -189,20 +226,22 @@ static GLuint Compile(GLenum type, const std::string& src)
   es_glGetShaderiv(sh, ES_COMPILE_STATUS, &ok);
   if (!ok)
   {
-    char log[2048];
+    char log[4096];
     es_glGetShaderInfoLog(sh, sizeof(log), NULL, log);
-    GLES_Log("GLES: FFP %s shader failed:\n%s\n--- source ---\n%s", type == ES_VERTEX_SHADER ? "vertex" : "fragment", log, src.c_str());
+    GLES_Log("GLES: %s shader failed:\n%s\n--- source ---\n%s", type == ES_VERTEX_SHADER ? "vertex" : "fragment", log, src.c_str());
   }
+  sShaders[src] = sh;
   return sh;
 }
 
-static SFFPProgram Build(const SFFPKey& k)
+static SPipeProgram Build(const SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
 {
-  SFFPProgram p;
+  SPipeProgram p;
   memset(&p, 0, sizeof(p));
-  std::string vsrc = BuildVertexShader(k), fsrc = BuildFragmentShader(k);
+  std::string vsrc = vp ? vp->glsl : BuildFFPVertex(k.ffp);
+  std::string fsrc = fp ? ARBFragmentWithAlphaTest(*fp, k.ffp) : BuildFFPFragment(k.ffp);
   static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
-  if (debug) GLES_Log("GLES: FFP program #%d sources:\n%s\n%s", (int)sPrograms.size() + 1, vsrc.c_str(), fsrc.c_str());
+  if (debug) GLES_Log("GLES: program #%d (vp %u, fp %u) sources:\n%s\n%s", (int)sPrograms.size() + 1, k.vp, k.fp, vsrc.c_str(), fsrc.c_str());
   GLuint vs = Compile(ES_VERTEX_SHADER, vsrc);
   GLuint fs = Compile(ES_FRAGMENT_SHADER, fsrc);
   p.prog = es_glCreateProgram();
@@ -219,12 +258,10 @@ static SFFPProgram Build(const SFFPKey& k)
   es_glGetProgramiv(p.prog, ES_LINK_STATUS, &ok);
   if (!ok)
   {
-    char log[2048];
+    char log[4096];
     es_glGetProgramInfoLog(p.prog, sizeof(log), NULL, log);
-    GLES_Log("GLES: FFP program link failed: %s", log);
+    GLES_Log("GLES: program link failed (vp %u, fp %u): %s", k.vp, k.fp, log);
   }
-  es_glDeleteShader(vs);
-  es_glDeleteShader(fs);
   es_glUseProgram(p.prog);
   sCurrentProg = p.prog;
   p.uMVP = es_glGetUniformLocation(p.prog, "u_mvp");
@@ -232,6 +269,10 @@ static SFFPProgram Build(const SFFPKey& k)
   p.uAlphaRef = es_glGetUniformLocation(p.prog, "u_alphaRef");
   p.uFogColor = es_glGetUniformLocation(p.prog, "u_fogColor");
   p.uFogParams = es_glGetUniformLocation(p.prog, "u_fogParams");
+  p.uEnvV = es_glGetUniformLocation(p.prog, "envv");
+  p.uEnvF = es_glGetUniformLocation(p.prog, "envf");
+  p.envVCount = vp ? vp->maxEnv : 0;
+  p.envFCount = fp ? fp->maxEnv : 0;
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
     sprintf(buf, "u_texMat%d", i); p.uTexMat[i] = es_glGetUniformLocation(p.prog, buf);
@@ -244,79 +285,125 @@ static SFFPProgram Build(const SFFPKey& k)
   return p;
 }
 
-static void BuildKey(SFFPKey& k)
+//////////////////////////////////////////////////////////////////////////
+// Per-draw state
+//////////////////////////////////////////////////////////////////////////
+
+static STextureObj* TextureForARBUnit(int unit, int target)
+{
+  STexUnitState& u = g_es.unit[unit];
+  GLuint id = 0;
+  switch (target)
+  {
+    case ARB_TEX_2D: case ARB_TEX_SHADOW2D: id = u.bound2D; break;
+    case ARB_TEX_RECT: case ARB_TEX_SHADOWRECT: id = u.boundRect; break;
+    case ARB_TEX_CUBE: id = u.boundCube; break;
+    case ARB_TEX_3D: id = u.bound3D; break;
+  }
+  if (!id) return NULL;
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
+  return it == g_esTextures.end() ? NULL : &it->second;
+}
+
+static void BuildKey(SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
 {
   memset(&k, 0, sizeof(k));
-  for (int i = 0; i < GLES_MAX_UNITS; i++)
+  k.vp = vp ? vp->id : 0;
+  k.fp = fp ? fp->id : 0;
+  SFFPKey& f = k.ffp;
+  if (!vp)
+    for (int i = 0; i < GLES_MAX_UNITS; i++) f.texMatrix[i] = g_es.unit[i].texMatrixIdentity ? 0 : 1;
+  if (!fp)
   {
-    GLenum target = 0;
-    STextureObj* o = GLES_BoundTexture(i, target);
-    if (!o) continue;
-    switch (target)
+    for (int i = 0; i < GLES_MAX_UNITS; i++)
     {
-      case ES_TEXTURE_CUBE_MAP: k.unitType[i] = UNIT_CUBE; break;
-      case ES_TEXTURE_3D: k.unitType[i] = UNIT_3D; break;
-      case ES_TEXTURE_RECTANGLE_NV: k.unitType[i] = UNIT_RECT; break;
-      default: k.unitType[i] = UNIT_2D; break;
+      GLenum target = 0;
+      STextureObj* o = GLES_BoundTexture(i, target);
+      if (!o) continue;
+      switch (target)
+      {
+        case ES_TEXTURE_CUBE_MAP: f.unitType[i] = UNIT_CUBE; break;
+        case ES_TEXTURE_3D: f.unitType[i] = UNIT_3D; break;
+        case ES_TEXTURE_RECTANGLE_NV: f.unitType[i] = UNIT_RECT; break;
+        default: f.unitType[i] = UNIT_2D; break;
+      }
+      f.env[i] = g_es.unit[i].env;
+      memset(f.env[i].color, 0, sizeof(f.env[i].color)); // uniform, not part of the key
     }
-    k.texMatrix[i] = g_es.unit[i].texMatrixIdentity ? 0 : 1;
-    k.env[i] = g_es.unit[i].env;
-    memset(k.env[i].color, 0, sizeof(k.env[i].color)); // uniform, not part of the key
+    if (g_es.fog) f.fogMode = (g_es.fogMode == GL_LINEAR) ? 1 : (g_es.fogMode == GL_EXP) ? 2 : 3;
   }
-  k.alphaTest = g_es.alphaTest && g_es.alphaFunc != GL_ALWAYS;
-  k.alphaFunc = (unsigned char)(g_es.alphaFunc - GL_NEVER);
-  if (g_es.fog) k.fogMode = (g_es.fogMode == GL_LINEAR) ? 1 : (g_es.fogMode == GL_EXP) ? 2 : 3;
+  f.alphaTest = g_es.alphaTest && g_es.alphaFunc != GL_ALWAYS;
+  f.alphaFunc = (unsigned char)(g_es.alphaFunc - GL_NEVER);
 }
 
 bool GLES_PrepareDraw()
 {
-  static bool loggedARB;
-  if ((g_es.vertexProgram || g_es.fragmentProgram) && !loggedARB)
-  {
-    loggedARB = true;
-    GLES_Log("GLES: ARB programs are not translated yet; drawing with fixed function");
-  }
-
-  SFFPKey k;
-  BuildKey(k);
-  std::map<SFFPKey, SFFPProgram>::iterator it = sPrograms.find(k);
+  const SARBProgram* vp = GLES_ARB_Bound(true);
+  const SARBProgram* fp = GLES_ARB_Bound(false);
+  SPipeKey k;
+  BuildKey(k, vp, fp);
+  std::map<SPipeKey, SPipeProgram>::iterator it = sPrograms.find(k);
   if (it == sPrograms.end())
   {
-    it = sPrograms.insert(std::make_pair(k, Build(k))).first;
-    GLES_Log("GLES: FFP program #%d built", (int)sPrograms.size());
+    it = sPrograms.insert(std::make_pair(k, Build(k, vp, fp))).first;
+    GLES_Log("GLES: program #%d built (vp %u, fp %u)", (int)sPrograms.size(), k.vp, k.fp);
   }
-  SFFPProgram& p = it->second;
+  SPipeProgram& p = it->second;
   if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; }
 
-  es_glUniformMatrix4fv(p.uMVP, 1, GL_FALSE, GLES_CurrentMVP());
-  if (p.uMV >= 0) es_glUniformMatrix4fv(p.uMV, 1, GL_FALSE, g_es.modelview.m[g_es.modelview.depth]);
-  if (k.alphaTest) es_glUniform1f(p.uAlphaRef, g_es.alphaRef);
-  if (k.fogMode)
+  if (!vp)
+  {
+    es_glUniformMatrix4fv(p.uMVP, 1, GL_FALSE, GLES_CurrentMVP());
+    if (p.uMV >= 0) es_glUniformMatrix4fv(p.uMV, 1, GL_FALSE, g_es.modelview.m[g_es.modelview.depth]);
+    for (int i = 0; i < GLES_MAX_UNITS; i++)
+      if (k.ffp.texMatrix[i] && p.uTexMat[i] >= 0) es_glUniformMatrix4fv(p.uTexMat[i], 1, GL_FALSE, g_es.unit[i].texMatrix);
+  }
+  else if (p.uEnvV >= 0 && p.envVCount > 0)
+    es_glUniform4fv(p.uEnvV, p.envVCount, GLES_ARB_Env(true));
+  if (fp && p.uEnvF >= 0 && p.envFCount > 0)
+    es_glUniform4fv(p.uEnvF, p.envFCount, GLES_ARB_Env(false));
+  if (k.ffp.alphaTest && p.uAlphaRef >= 0) es_glUniform1f(p.uAlphaRef, g_es.alphaRef);
+  if ((fp && fp->fogMode) || (!fp && k.ffp.fogMode))
   {
     float range = g_es.fogEnd - g_es.fogStart;
     float params[4] = { g_es.fogStart, g_es.fogEnd, range != 0.0f ? 1.0f / range : 1.0f, g_es.fogDensity };
-    es_glUniform4fv(p.uFogColor, 1, g_es.fogColor);
-    es_glUniform4fv(p.uFogParams, 1, params);
+    if (p.uFogColor >= 0) es_glUniform4fv(p.uFogColor, 1, g_es.fogColor);
+    if (p.uFogParams >= 0) es_glUniform4fv(p.uFogParams, 1, params);
   }
+
+  // Textures: the ARB program names its targets; fixed function follows the enables.
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
-    if (k.unitType[i] == UNIT_OFF) continue;
-    GLenum target = 0;
-    STextureObj* o = GLES_BoundTexture(i, target);
+    STextureObj* o = NULL;
+    bool rect = false;
+    if (fp)
+    {
+      if (!fp->texTarget[i]) continue;
+      o = TextureForARBUnit(i, fp->texTarget[i]);
+      rect = (fp->texTarget[i] == ARB_TEX_RECT || fp->texTarget[i] == ARB_TEX_SHADOWRECT);
+    }
+    else
+    {
+      if (k.ffp.unitType[i] == UNIT_OFF) continue;
+      GLenum target = 0;
+      o = GLES_BoundTexture(i, target);
+      rect = (k.ffp.unitType[i] == UNIT_RECT);
+      if (p.uEnvColor[i] >= 0) es_glUniform4fv(p.uEnvColor[i], 1, g_es.unit[i].env.color);
+    }
+    if (!o) continue;
     es_glActiveTexture(ES_TEXTURE0 + i);
     es_glBindTexture(o->target, o->id);
-    if (p.uEnvColor[i] >= 0) es_glUniform4fv(p.uEnvColor[i], 1, g_es.unit[i].env.color);
-    if (k.texMatrix[i] && p.uTexMat[i] >= 0) es_glUniformMatrix4fv(p.uTexMat[i], 1, GL_FALSE, g_es.unit[i].texMatrix);
-    if (k.unitType[i] == UNIT_RECT && p.uRectScale[i] >= 0)
+    if (rect && p.uRectScale[i] >= 0)
       es_glUniform2f(p.uRectScale[i], o->width ? 1.0f / o->width : 1.0f, o->height ? 1.0f / o->height : 1.0f);
   }
   es_glActiveTexture(ES_TEXTURE0 + g_es.activeUnit);
+
   static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
   if (debug)
   {
     static int errors;
     GLenum err = es_glGetError();
-    if (err && errors++ < 20) GLES_Log("GLES: GL error 0x%x before draw (program #%d)", err, (int)std::distance(sPrograms.begin(), it) + 1);
+    if (err && errors++ < 20) GLES_Log("GLES: GL error 0x%x before draw (vp %u, fp %u)", err, k.vp, k.fp);
   }
   return true;
 }

@@ -244,3 +244,24 @@ on the same Mac.
 
 Total is on the order of 6–9k new lines, most of it in the FFP generator and
 the translator, against a 46k-line renderer that stays intact until Phase 6.
+
+## 9. Status
+
+- **Phase 0 done.** `XRenderGLES` module, `-RENDERER:GLES`, ES 3.0 context through ANGLE on macOS, stub logger.
+- **Phase 1 done.** Menus and videos match the GL renderer.
+- **Phase 2 done.** ARB vertex and fragment programs are translated to GLSL ES at
+  `glProgramStringARB` time (`GLES/gles_arb_translate.cpp`) and paired with each
+  other or with generated fixed-function halves (`GLES/gles_ffp.cpp`). The Pier
+  level renders with terrain, vegetation, water, characters, weapon and HUD, and
+  every program in the level translated, compiled and linked without error.
+- **Development aids** (all environment variables, all builds):
+  `FARCRY_GLES_DEBUG=1` logs entry-point resolution, translated and generated
+  shader sources, uploads and GL errors to stderr; `FARCRY_SCREENSHOT_FRAME=n`
+  / `FARCRY_SCREENSHOT_EVERY=n` with `FARCRY_SCREENSHOT_FILE=<name>` dump JPEGs
+  from either renderer; `FARCRY_RESUME_FRAME=n` keeps the in-game menu off from
+  frame n so `./FarCry -DEVMODE -RENDERER:GLES '"map pier"'` reaches gameplay
+  unattended. The renderer's own `r_Log=3` (system.cfg) writes a full GL call
+  trace to `OpenGLLog.txt` on either module.
+- **Next:** Phase 3 (fixed-function completeness: texgen, lighting, clip plane),
+  Phase 4 (shadow maps, depth probes, occlusion queries, `glGetTexImage`),
+  then the screenshot-diff harness.

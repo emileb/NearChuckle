@@ -122,6 +122,10 @@ static bool MapInternalFormat(GLenum internalFormat, SFormat& f)
       f.internal = ES_R8; f.format = ES_RED; f.channels = 1; f.swizzle = "000r"; return true;
     case GL_INTENSITY: case GL_INTENSITY8: case GL_INTENSITY4: case GL_INTENSITY12: case GL_INTENSITY16:
       f.internal = ES_R8; f.format = ES_RED; f.channels = 1; f.swizzle = "rrrr"; return true;
+    case ES_COMPRESSED_RGB_S3TC_DXT1: // uncompressed data with a compressed internal format: store uncompressed
+      f.internal = ES_RGB8; f.format = GL_RGB; f.channels = 3; return true;
+    case ES_COMPRESSED_RGBA_S3TC_DXT1: case ES_COMPRESSED_RGBA_S3TC_DXT3: case ES_COMPRESSED_RGBA_S3TC_DXT5:
+      f.internal = ES_RGBA8; f.format = GL_RGBA; f.channels = 4; return true;
     case 2: case GL_LUMINANCE_ALPHA: case GL_LUMINANCE8_ALPHA8: case GL_LUMINANCE4_ALPHA4: case GL_LUMINANCE6_ALPHA2: case GL_LUMINANCE12_ALPHA4: case GL_LUMINANCE12_ALPHA12: case GL_LUMINANCE16_ALPHA16:
     case 0x84EB /* GL_COMPRESSED_LUMINANCE_ALPHA_ARB */:
       f.internal = ES_RG8; f.format = ES_RG; f.channels = 2; f.swizzle = "rrrg"; return true;

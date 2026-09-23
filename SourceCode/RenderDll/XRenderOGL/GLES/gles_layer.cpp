@@ -7,6 +7,7 @@
 =============================================================================*/
 #include "gles_internal.h"
 #include "gles_layer.h"
+#include "gles_arb.h"
 #include <signal.h>
 #include <execinfo.h>
 #include <unistd.h>
@@ -133,6 +134,7 @@ static std::map<std::string, void*>& ImplTable()
     GLES_RegisterTexture(table);
     GLES_RegisterVertex(table);
     GLES_RegisterFFP(table);
+    GLES_RegisterARB(table);
   }
   return table;
 }

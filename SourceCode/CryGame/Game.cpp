@@ -789,6 +789,17 @@ bool CXGame::Update()
 		m_nDEBUG_TIMING = 1;
 	}
 
+#ifdef LINUX
+	// Development aid: FARCRY_RESUME_FRAME=<n> keeps the in-game menu off from frame n on, for
+	// unattended renderer captures.
+	{
+		static int nResumeFrame = getenv("FARCRY_RESUME_FRAME") ? atoi(getenv("FARCRY_RESUME_FRAME")) : -1;
+		static int nFrame = 0;
+		if (nResumeFrame > 0 && ++nFrame >= nResumeFrame && m_bMenuOverlay && !m_bEditor && m_pClient && m_pClient->IsConnected())
+			MenuOff();
+	}
+#endif
+
 	if (!m_bEditor)
 	{
 		if (!m_bMenuOverlay || !m_pUISystem || m_pUISystem->GetScriptObjectUI()->CanRenderGame())

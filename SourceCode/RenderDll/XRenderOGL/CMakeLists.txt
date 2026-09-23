@@ -193,7 +193,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 # OpenGL ES 3.0 build of the same renderer, routed through GLES/ (see GLES-PORT-PLAN.md).
 if (NOT MSVC)
-    add_library(XRenderGLES SHARED ${SRC_FILES} GLES/gles_layer.cpp GLES/gles_glu.cpp GLES/gles_native.cpp GLES/gles_state.cpp GLES/gles_texture.cpp GLES/gles_vertex.cpp GLES/gles_ffp.cpp)
+    add_library(XRenderGLES SHARED ${SRC_FILES} GLES/gles_layer.cpp GLES/gles_glu.cpp GLES/gles_native.cpp GLES/gles_state.cpp GLES/gles_texture.cpp GLES/gles_vertex.cpp GLES/gles_ffp.cpp GLES/gles_arb.cpp GLES/gles_arb_translate.cpp)
     target_compile_definitions(XRenderGLES PRIVATE GLES_RENDERER DISABLE_CG)
     target_include_directories(XRenderGLES PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
