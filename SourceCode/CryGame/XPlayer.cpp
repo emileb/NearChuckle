@@ -1040,8 +1040,12 @@ void CPlayer::Update()
 		FRAME_PROFILER( "CPlayerUpdate::PostStep",GetISystem(),PROFILE_GAME );
 		pe_params_flags pf;
 		pf.flagsOR = pef_custom_poststep;
-		if (m_bIsAI)
+		// In a vehicle the rotation follows the vehicle; without this the physics refuses bank
+		// angles that push the capsule into the vehicle and the camera target jumps for a frame.
+		if (m_bIsAI || m_pVehicle)
 			pf.flagsOR |= lef_loosen_stuck_checks;
+		else
+			pf.flagsAND = ~lef_loosen_stuck_checks;
 		physEnt->SetParams(&pf);
 	}
 

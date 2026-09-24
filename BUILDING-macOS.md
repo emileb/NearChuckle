@@ -96,6 +96,12 @@ truncations that happened to survive there.
   catch-up and no interpolation: at 60 fps a vehicle moved two, two, one
   quanta per frame, and at 300 fps only every third frame. Single player now
   steps physics by the frame time; multiplayer keeps the fixed step.
+- **Vehicle passengers' rotation was refused on some bank angles.** The
+  living-entity physics rejects a rotation that would put the player capsule
+  inside geometry and keeps the previous one; for a passenger that geometry is
+  the vehicle, so the glider-following orientation was dropped for a frame and
+  the third-person camera target jumped by metres. The player now carries
+  `lef_loosen_stuck_checks` while in a vehicle and the check honours it.
 - **`g_maxfps` settled near twice the requested rate** because the sleep was
   counted into the next frame's time; it now paces against a deadline.
 - **Camera tracing:** `FARCRY_CAMLOG=1` prints the player camera update, the
