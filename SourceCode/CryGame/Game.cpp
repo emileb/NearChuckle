@@ -845,13 +845,20 @@ bool CXGame::Update()
 //		float	extraTime = pTimer->GetAsyncCurTime() + 1.0f/maxFPS - pTimer->GetFrameTime();
 //		while(extraTime - pTimer->GetAsyncCurTime() > 0)
 //			;
-		DWORD	extraTime = (DWORD)((1.0f/maxFPS - pTimer->GetFrameTime())*1000.0f);
 #if !defined(LINUX)
+		DWORD	extraTime = (DWORD)((1.0f/maxFPS - pTimer->GetFrameTime())*1000.0f);
 		if(extraTime>0&&extraTime<300)//thread sleep not process sleep
 			Sleep(extraTime);
 #else
-		if(extraTime > 0 && extraTime < 300)
-			SDL_Delay(extraTime);
+		// Pace against a running deadline: the frame time already includes the previous sleep, so
+		// sleeping "budget minus frame time" alternates between sleeping and not, landing near 2x the cap.
+		static Uint64 nNextFrame = 0;
+		Uint64 nNow = SDL_GetTicksNS(), nPeriod = (Uint64)(1.0e9 / maxFPS);
+		if (nNextFrame == 0 || nNow > nNextFrame + nPeriod)
+			nNextFrame = nNow;
+		else if (nNow < nNextFrame)
+			SDL_DelayNS(nNextFrame - nNow);
+		nNextFrame += nPeriod;
 #endif
 	}
 

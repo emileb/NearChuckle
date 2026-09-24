@@ -90,6 +90,8 @@ truncations that happened to survive there.
 
 ## Engine fixes found while playing on this port
 
+- **`g_maxfps` settled near twice the requested rate** because the sleep was
+  counted into the next frame's time; it now paces against a deadline.
 - **Camera tracing:** `FARCRY_CAMLOG=1` prints the player camera update, the
   third-person camera maths, the eye offset and physics orientation, the
   vehicle's physics state and the view camera handed to the renderer, one
