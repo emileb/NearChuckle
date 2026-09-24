@@ -67,6 +67,22 @@ void GLES_SwapWindow(SDL_Window* win)
     es_glBindFramebuffer(ES_READ_FRAMEBUFFER, sSceneFBO);
     es_glBindFramebuffer(ES_DRAW_FRAMEBUFFER, 0);
     es_glBlitFramebuffer(0, 0, sSceneW, sSceneH, 0, 0, pw, ph, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // If the surface still has alpha, the compositor honours it (macOS/ANGLE, Android): the sky
+    // pass leaves alpha 0 and shows black on screen while screenshots look fine. Write alpha 1.
+    static int alphaBits = -1;
+    if (alphaBits < 0) { alphaBits = 0; SDL_GL_GetAttribute(SDL_GL_ALPHA_SIZE, &alphaBits); GLES_Log("GLES: window surface alpha bits %d", alphaBits); }
+    if (alphaBits > 0)
+    {
+      GLboolean mask[4]; GLfloat clear[4];
+      es_glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+      es_glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+      es_glBindFramebuffer(ES_FRAMEBUFFER, 0);
+      es_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+      es_glClearColor(0, 0, 0, 1);
+      es_glClear(GL_COLOR_BUFFER_BIT);
+      es_glColorMask(mask[0], mask[1], mask[2], mask[3]);
+      es_glClearColor(clear[0], clear[1], clear[2], clear[3]);
+    }
     if (scissor) es_glEnable(GL_SCISSOR_TEST);
   }
   SDL_GL_SwapWindow(win);

@@ -121,7 +121,7 @@ static const SForward sForwardTable[] = {
   { "glViewport", "glViewport" }, { "glScissor", "glScissor" },
   { "glBlendFunc", "glBlendFunc" }, { "glDepthFunc", "glDepthFunc" }, { "glDepthMask", "glDepthMask" },
   { "glColorMask", "glColorMask" }, { "glCullFace", "glCullFace" }, { "glFrontFace", "glFrontFace" },
-  { "glStencilFunc", "glStencilFunc" }, { "glStencilOp", "glStencilOp" }, { "glStencilMask", "glStencilMask" },
+
   { "glFinish", "glFinish" }, { "glFlush", "glFlush" }, { "glPolygonOffset", "glPolygonOffset" },
   { "glGenTextures", "glGenTextures" }, { "glIsTexture", "glIsTexture" }, { "glLineWidth", "glLineWidth" },
   { NULL, NULL }
@@ -221,8 +221,10 @@ void GLES_SetContextAttributes()
   SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-  SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
   SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+  // The window only receives the scene framebuffer blit; an alpha channel on it is composited
+  // by the OS on ES (ANGLE/Metal, Android), turning any pixel with alpha < 1 black.
+  SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 }

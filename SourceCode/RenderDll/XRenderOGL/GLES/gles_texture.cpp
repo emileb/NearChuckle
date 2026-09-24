@@ -224,6 +224,26 @@ static void ApplySwizzle(STextureObj& o, const char* sw)
 }
 
 static bool IsS3TC(GLenum f) { return f >= ES_COMPRESSED_RGB_S3TC_DXT1 && f <= ES_COMPRESSED_RGBA_S3TC_DXT5; }
+static int FaceIndex(GLenum target) { return (target >= 0x8515 && target <= 0x851A) ? (int)(target - 0x8515) : -1; }
+static int CompKey(GLenum target, int level) { int f = FaceIndex(target); return level + (f > 0 ? f * 16 : 0); }
+
+// The renderer uploads single cube faces into texture objects of their own and reads them back
+// (CopyTexture assembles cube maps that way). ES will not attach or sample a face of an incomplete
+// cube map, so the faces not yet uploaded at this level are allocated empty.
+static void CompleteCubeLevel(STextureObj& o, GLenum target, int level, GLsizei w, GLsizei h, GLenum internal, GLenum format, int compSize)
+{
+  int f = FaceIndex(target);
+  if (f < 0 || level >= 16) return;
+  o.faceMask[level] |= 1 << f;
+  if (o.faceMask[level] == 0x3F) return;
+  std::vector<GLubyte> zero(compSize > 0 ? compSize : 0);
+  for (int i = 0; i < 6; i++)
+  {
+    if (o.faceMask[level] & (1 << i)) continue;
+    if (compSize > 0) es_glCompressedTexImage2D(0x8515 + i, level, internal, w, h, 0, compSize, &zero[0]);
+    else es_glTexImage2D(0x8515 + i, level, internal, w, h, 0, format, GL_UNSIGNED_BYTE, NULL);
+  }
+}
 static bool IsDepthFormat(GLenum f) { return f == GL_DEPTH_COMPONENT || (f >= 0x81A5 && f <= 0x81A7) /* DEPTH_COMPONENT16/24/32 */; }
 
 // Depth textures are allocated in the scene framebuffer's format so its depth can be blitted into them.
@@ -283,15 +303,19 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
     int lw = w, lh = h, lvl = level;
     for (;;)
     {
-      std::vector<GLubyte>& blocks = o->compressed[lvl];
+      std::vector<GLubyte>& blocks = o->compressed[CompKey(target, lvl)];
       int size = GLES_CompressDXT(internalFormat, lw, lh, &rgba[0], blocks);
       if (NativeS3TC())
+      {
         es_glCompressedTexImage2D(nativeTargetC, lvl, internalFormat, lw, lh, 0, size, &blocks[0]);
+        CompleteCubeLevel(*o, target, lvl, lw, lh, internalFormat, 0, size);
+      }
       else
       {
         es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
         es_glTexImage2D(nativeTargetC, lvl, ES_RGBA8, lw, lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, &rgba[0]);
         es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+        CompleteCubeLevel(*o, target, lvl, lw, lh, ES_RGBA8, GL_RGBA, 0);
       }
       if (lvl >= o->levels) o->levels = lvl + 1;
       if (!(level == 0 && o->generateMipmap) || (lw == 1 && lh == 1)) break;
@@ -325,6 +349,16 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
     if (!logged[internalFormat]) { logged[internalFormat] = true; GLES_Log("GLES: glTexImage2D internal format 0x%x unsupported", internalFormat); }
     return;
   }
+  // Signed bytes (DSDT bump maps) are biased to unsigned; the NV texture shaders that read them signed are not offered.
+  std::vector<GLubyte> biased;
+  if (type == GL_BYTE && pixels && SrcChannels(format) > 0)
+  {
+    biased.resize(w * h * SrcChannels(format));
+    const GLubyte* s = (const GLubyte*)pixels;
+    for (size_t i = 0; i < biased.size(); i++) biased[i] = s[i] ^ 0x80;
+    pixels = &biased[0];
+    type = GL_UNSIGNED_BYTE;
+  }
   if (type != GL_UNSIGNED_BYTE)
   {
     static std::map<GLenum, bool> logged;
@@ -338,6 +372,7 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
   if (debug) GLES_Log("GLES: glTexImage2D tex %u target 0x%x level %d %dx%d internal 0x%x -> 0x%x format 0x%x -> 0x%x%s", o->id, target, level, w, h, internalFormat, f.internal, format, f.format, converted ? " (converted)" : "");
   es_glTexImage2D(nativeTarget, level, f.internal, w, h, 0, f.format, GL_UNSIGNED_BYTE, data);
   if (converted) es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+  CompleteCubeLevel(*o, target, level, w, h, f.internal, f.format, 0);
   ApplySwizzle(*o, f.swizzle);
   if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
   if (level >= o->levels) o->levels = level + 1;
@@ -365,8 +400,9 @@ static void __stdcall gles_glCompressedTexImage2DARB(GLenum target, GLint level,
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
-  if (data) o->compressed[level].assign((const GLubyte*)data, (const GLubyte*)data + size);
+  if (data) o->compressed[CompKey(target, level)].assign((const GLubyte*)data, (const GLubyte*)data + size);
   es_glCompressedTexImage2D(nativeTarget, level, internalFormat, w, h, 0, size, data);
+  CompleteCubeLevel(*o, target, level, w, h, internalFormat, 0, size);
   if (level == 0 && o->generateMipmap) GLES_Log("GLES: mipmap generation requested for compressed texture %u; not possible on ES", o->id);
   if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
   if (level >= o->levels) o->levels = level + 1;
@@ -378,7 +414,7 @@ static void __stdcall gles_glGetCompressedTexImageARB(GLenum target, GLint level
   GLuint id = BoundSlot(u, target);
   std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
   if (it == g_esTextures.end()) return;
-  std::map<int, std::vector<GLubyte> >::iterator lv = it->second.compressed.find(level);
+  std::map<int, std::vector<GLubyte> >::iterator lv = it->second.compressed.find(CompKey(target, level));
   if (lv == it->second.compressed.end()) { GLES_Log("GLES: glGetCompressedTexImage: no blocks kept for texture %u level %d", id, level); return; }
   memcpy(out, &lv->second[0], lv->second.size());
 }
@@ -422,6 +458,7 @@ static void __stdcall gles_glCopyTexImage2D(GLenum target, GLint level, GLenum i
     SFormat f;
     if (!MapInternalFormat(internalFormat, f)) { GLES_Log("GLES: glCopyTexImage2D internal format 0x%x unsupported", internalFormat); return; }
     es_glCopyTexImage2D(nativeTarget, level, f.internal, x, y, w, h, 0);
+    CompleteCubeLevel(*o, target, level, w, h, f.internal, f.format, 0);
     ApplySwizzle(*o, f.swizzle);
   }
   if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }

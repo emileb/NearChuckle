@@ -310,6 +310,7 @@ static void SetCap(GLenum cap, bool on)
     case GL_NORMALIZE:             g_es.normalize = on; return;
     case ES_VERTEX_PROGRAM_ARB:    g_es.vertexProgram = on; return;
     case ES_FRAGMENT_PROGRAM_ARB:  g_es.fragmentProgram = on; return;
+    case 0x8910 /* GL_STENCIL_TEST_TWO_SIDE_EXT */: g_es.stencilTwoSide = on; return;
   }
   if (cap >= GL_CLIP_PLANE0 && cap < GL_CLIP_PLANE0 + 6) { g_es.clipPlane[cap - GL_CLIP_PLANE0] = on; return; }
   if (IsNativeCap(cap)) { if (on) es_glEnable(cap); else es_glDisable(cap); return; }
@@ -318,6 +319,20 @@ static void SetCap(GLenum cap, bool on)
 
 static void __stdcall gles_glEnable(GLenum cap) { SetCap(cap, true); }
 static void __stdcall gles_glDisable(GLenum cap) { SetCap(cap, false); }
+
+// Two-sided stencil (shadow volumes): EXT face selection and the ATI separate calls map onto
+// the ES *Separate entry points.
+static GLenum StencilFace() { return g_es.stencilTwoSide ? g_es.stencilFace : GL_FRONT_AND_BACK; }
+static void __stdcall gles_glActiveStencilFaceEXT(GLenum face) { g_es.stencilFace = face; }
+static void __stdcall gles_glStencilFunc(GLenum func, GLint ref, GLuint mask) { es_glStencilFuncSeparate(StencilFace(), func, ref, mask); }
+static void __stdcall gles_glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) { es_glStencilOpSeparate(StencilFace(), fail, zfail, zpass); }
+static void __stdcall gles_glStencilMask(GLuint mask) { es_glStencilMaskSeparate(StencilFace(), mask); }
+static void __stdcall gles_glStencilOpSeparateATI(GLenum face, GLenum fail, GLenum zfail, GLenum zpass) { es_glStencilOpSeparate(face, fail, zfail, zpass); }
+static void __stdcall gles_glStencilFuncSeparateATI(GLenum frontFunc, GLenum backFunc, GLint ref, GLuint mask)
+{
+  es_glStencilFuncSeparate(GL_FRONT, frontFunc, ref, mask);
+  es_glStencilFuncSeparate(GL_BACK, backFunc, ref, mask);
+}
 
 static GLboolean __stdcall gles_glIsEnabled(GLenum cap)
 {
@@ -529,6 +544,7 @@ static void __stdcall gles_glPointSize(GLfloat) {}
 void GLES_InitState()
 {
   memset(&g_es, 0, sizeof(g_es));
+  g_es.stencilFace = GL_FRONT;
   g_esTextures.clear();
   g_esBuffers.clear();
   g_es.matrixMode = GL_MODELVIEW;
@@ -586,6 +602,7 @@ void GLES_RegisterState(std::map<std::string, void*>& t)
   REG(glAlphaFunc) REG(glFogf) REG(glFogi) REG(glFogfv) REG(glFogiv) REG(glClipPlane)
   REG(glClearDepth) REG(glDepthRange) REG(glPixelStorei)
   REG(glShadeModel) REG(glHint) REG(glDrawBuffer) REG(glReadBuffer) REG(glPolygonMode)
+  REG(glActiveStencilFaceEXT) REG(glStencilFunc) REG(glStencilOp) REG(glStencilMask) REG(glStencilOpSeparateATI) REG(glStencilFuncSeparateATI)
   REG(glLightModelfv) REG(glLightModeli) REG(glLightModelf) REG(glMaterialfv) REG(glMaterialf)
   REG(glLightfv) REG(glLightf) REG(glColorMaterial) REG(glPointSize)
 #undef REG

@@ -47,9 +47,11 @@ static void __stdcall gles_glGetTexImage(GLenum target, GLint level, GLenum form
   es_glGetIntegerv(0x8CA6 /* GL_FRAMEBUFFER_BINDING */, &prevFBO);
   es_glBindFramebuffer(ES_FRAMEBUFFER, sReadFBO);
   es_glFramebufferTexture2D(ES_FRAMEBUFFER, ES_COLOR_ATTACHMENT0, attachTarget, id, level);
-  if (es_glCheckFramebufferStatus(ES_FRAMEBUFFER) != ES_FRAMEBUFFER_COMPLETE)
+  GLenum status = es_glCheckFramebufferStatus(ES_FRAMEBUFFER);
+  if (status != ES_FRAMEBUFFER_COMPLETE)
   {
-    GLES_Log("GLES: glGetTexImage: texture %u level %d not readable", id, level);
+    GLES_Log("GLES: glGetTexImage: texture %u level %d not readable (status 0x%x, error 0x%x, target 0x%x, internal 0x%x, %dx%d, %d levels%s)",
+      id, level, status, es_glGetError(), attachTarget, o.internalFormat, o.width, o.height, o.levels, o.generateMipmap ? ", auto mips" : "");
     es_glBindFramebuffer(ES_FRAMEBUFFER, prevFBO);
     return;
   }
@@ -59,9 +61,30 @@ static void __stdcall gles_glGetTexImage(GLenum target, GLint level, GLenum form
   es_glPixelStorei(ES_PACK_ALIGNMENT, 4);
   es_glFramebufferTexture2D(ES_FRAMEBUFFER, ES_COLOR_ATTACHMENT0, attachTarget, 0, 0);
   es_glBindFramebuffer(ES_FRAMEBUFFER, prevFBO);
+  // The framebuffer read ignores the swizzle that makes R8/RG8 stand in for the GL luminance,
+  // alpha and intensity formats, so first rebuild the RGBA that GL would report for the texture.
+  int n = w * h;
+  GLenum base = o.internalFormat;
+  switch (base)
+  {
+    case 1: case GL_LUMINANCE4: case GL_LUMINANCE8: case GL_LUMINANCE12: case GL_LUMINANCE16: case 0x84EA: base = GL_LUMINANCE; break;
+    case GL_ALPHA4: case GL_ALPHA8: case GL_ALPHA12: case GL_ALPHA16: case 0x84E9: base = GL_ALPHA; break;
+    case GL_INTENSITY4: case GL_INTENSITY8: case GL_INTENSITY12: case GL_INTENSITY16: base = GL_INTENSITY; break;
+    case 2: case GL_LUMINANCE8_ALPHA8: case GL_LUMINANCE4_ALPHA4: case GL_LUMINANCE6_ALPHA2: case GL_LUMINANCE12_ALPHA4: case GL_LUMINANCE12_ALPHA12: case GL_LUMINANCE16_ALPHA16: case 0x84EB: base = GL_LUMINANCE_ALPHA; break;
+  }
+  for (int i = 0; i < n; i++)
+  {
+    GLubyte* p = &rgba[i * 4];
+    switch (base)
+    {
+      case GL_LUMINANCE:       p[1] = p[2] = p[0]; p[3] = 255; break;
+      case GL_ALPHA:           p[3] = p[0]; p[0] = p[1] = p[2] = 0; break;
+      case GL_INTENSITY:       p[1] = p[2] = p[3] = p[0]; break;
+      case GL_LUMINANCE_ALPHA: p[3] = p[1]; p[1] = p[2] = p[0]; break;
+    }
+  }
   GLubyte* d = (GLubyte*)pixels;
   const GLubyte* s = &rgba[0];
-  int n = w * h;
   switch (format)
   {
     case GL_RGBA: memcpy(d, s, n * 4); break;
@@ -69,7 +92,8 @@ static void __stdcall gles_glGetTexImage(GLenum target, GLint level, GLenum form
     case GL_RGB: for (int i = 0; i < n; i++, s += 4, d += 3) { d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; } break;
     case GL_BGR_EXT: for (int i = 0; i < n; i++, s += 4, d += 3) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; } break;
     case GL_ALPHA: for (int i = 0; i < n; i++, s += 4) d[i] = s[3]; break;
-    case GL_LUMINANCE: case ES_RED: for (int i = 0; i < n; i++, s += 4) d[i] = s[0]; break;
+    case GL_LUMINANCE: case ES_RED: case GL_INTENSITY: for (int i = 0; i < n; i++, s += 4) d[i] = s[0]; break;
+    case GL_LUMINANCE_ALPHA: for (int i = 0; i < n; i++, s += 4, d += 2) { d[0] = s[0]; d[1] = s[3]; } break;
     default: GLES_Log("GLES: glGetTexImage format 0x%x unsupported", format); break;
   }
 }

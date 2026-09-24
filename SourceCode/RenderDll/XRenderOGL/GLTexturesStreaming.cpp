@@ -20,6 +20,9 @@ void STexPic::BuildMips()
     CreateMips();
 
   glBindTexture(m_TargetType, m_Bind);
+#ifdef GLES_RENDERER
+  if (getenv("FARCRY_GLES_DEBUG")) fprintf(stderr, "BuildMips: %s (%s) %dx%d mips %d bind %d\n", m_SourceName.c_str(), m_eTT == eTT_Cubemap ? "cube" : "2D", m_Width, m_Height, m_nMips, m_Bind);
+#endif
   if (m_eTT != eTT_Cubemap)
   {
     for (int i=0; i<m_nMips; i++)

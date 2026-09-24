@@ -170,7 +170,15 @@
   ES_PROC(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
   ES_PROC(void, glGetBooleanv, (GLenum, GLboolean*)) \
   ES_PROC(void, glViewport, (GLint, GLint, GLsizei, GLsizei)) \
-  ES_PROC(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))
+  ES_PROC(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean)) \
+  ES_PROC(void, glStencilFunc, (GLenum, GLint, GLuint)) \
+  ES_PROC(void, glStencilOp, (GLenum, GLenum, GLenum)) \
+  ES_PROC(void, glStencilMask, (GLuint)) \
+  ES_PROC(void, glStencilFuncSeparate, (GLenum, GLenum, GLint, GLuint)) \
+  ES_PROC(void, glStencilOpSeparate, (GLenum, GLenum, GLenum, GLenum)) \
+  ES_PROC(void, glStencilMaskSeparate, (GLenum, GLuint)) \
+  ES_PROC(void, glClear, (GLbitfield)) \
+  ES_PROC(void, glClearColor, (GLfloat, GLfloat, GLfloat, GLfloat))
 
 #define ES_PROC(ret, name, params) typedef ret (*PFN_##name) params; extern PFN_##name es_##name;
 ES_PROCS
@@ -238,7 +246,8 @@ struct STextureObj
   int levels;
   bool generateMipmap;
   bool hasSwizzle;
-  std::map<int, std::vector<GLubyte> > compressed;  // per level, for glGetCompressedTexImage
+  unsigned short faceMask[16];                      // cube maps: faces uploaded per level
+  std::map<int, std::vector<GLubyte> > compressed;  // per level (+16 per cube face), for glGetCompressedTexImage
 };
 
 int GLES_CompressDXT(GLenum format, int w, int h, const GLubyte* rgba, std::vector<GLubyte>& out);
@@ -284,6 +293,10 @@ struct SGLESState
   bool clipPlane[6]; float clipPlaneEq[6][4];   // eye space (transformed at glClipPlane time)
   bool vertexProgram, fragmentProgram;
   GLuint boundVP, boundFP;
+
+  // EXT_stencil_two_side: while enabled, stencil calls apply to the active face only
+  bool stencilTwoSide;
+  GLenum stencilFace;
 
   // client arrays
   SESArray vertexArray, normalArray, colorArray, color2Array, texcoordArray[GLES_MAX_UNITS];

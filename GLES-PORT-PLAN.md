@@ -293,6 +293,23 @@ the translator, against a 46k-line renderer that stays intact until Phase 6.
   attribute, buffer, texture and env-upload state, and rendering through the
   scene framebuffer. `FARCRY_FPS_EVERY=n` prints the rate; `FARCRY_GLES_DEBUG`
   prints per-path timing every 300 frames.
-- **Next:** find scenes for the Phase 3 paths (every new program logs its
-  texgen, light, clip, fog and alpha-test bits), then Phase 6 and the Android
-  module.
+- **Level sweep (2026-09-24).** Training, Fort, Carrier, Research, Boat and
+  Dam were compared against the GL renderer with the harness. Texgen and GL
+  lighting (Phase 3) are exercised by Fort, Carrier, Research, Boat and Dam
+  and match; clip planes have not appeared yet. The sweep found and fixed:
+  two-sided stencil for shadow volumes (`glActiveStencilFaceEXT` routed to
+  the ES `*Separate` calls), cube maps that the renderer assembles one face
+  per texture object (ES needs the other faces allocated to attach or
+  sample a face), compressed blocks kept per cube face, and signed-byte
+  bump-map uploads. Every sweep run ends with zero stub entry points hit.
+  Frame rates on GLES against GL: Pier 180/188, Fort 168/207, Carrier
+  482/379, Research 183/225, Training 383/267; Fort's gap is layer CPU time
+  on ~725 immediate-mode draws and ~170 program switches per frame.
+  All 17 multiplayer maps were then compared the same way: every run reaches
+  a clean shutdown with zero stub entry points and no layer warnings, and the
+  larger image differences (mp_jungle, mp_mangoriver, mp_dune, mp_radio) are
+  spawn timing, not rendering. Playing mp_airstrip by hand found the one
+  fault screenshots cannot show, the sky turning black on screen through the
+  window's alpha channel (fixed at present time; see the sweep commit).
+- **Next:** Phase 6 (batching immediate-mode draws and fewer program
+  switches, shim clean-up) and Phase 7, the Android module.
