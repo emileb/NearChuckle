@@ -86,6 +86,10 @@ static void QueryNative()
     "GL_ARB_vertex_buffer_object GL_EXT_stencil_two_side GL_EXT_stencil_wrap GL_NV_occlusion_query "
     "GL_ARB_texture_compression GL_SGIS_generate_mipmap GL_EXT_texture3D GL_EXT_bgra "
     "GL_EXT_secondary_color GL_EXT_draw_range_elements GL_EXT_texture_lod_bias GL_EXT_texture_rectangle ";
+  // Depth shadow maps work through the scene framebuffer, but the reference GL renderer on macOS
+  // has no SGIX depth textures either; opt in to compare.
+  if (getenv("FARCRY_GLES_DEPTHMAPS"))
+    sExtensions += "GL_SGIX_depth_texture GL_SGIX_shadow ";
   if (GLES_HasNativeExt("GL_EXT_texture_compression_s3tc") || GLES_HasNativeExt("GL_ANGLE_texture_compression_dxt"))
     sExtensions += "GL_EXT_texture_compression_s3tc ";
   if (GLES_HasNativeExt("GL_EXT_texture_filter_anisotropic"))
@@ -157,6 +161,7 @@ bool GLES_Init()
     SDL_GetWindowSize(win, &w, &h);
     SDL_GetWindowSizeInPixels(win, &pw, &ph);
     GLES_Log("GLES: window %dx%d, drawable %dx%d", w, h, pw, ph);
+    GLES_SceneFBOEnsure(pw, ph);
   }
   return true;
 }

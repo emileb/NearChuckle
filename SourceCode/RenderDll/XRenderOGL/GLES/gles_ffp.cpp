@@ -50,6 +50,7 @@ struct SPipeProgram
 static std::map<SPipeKey, SPipeProgram> sPrograms;
 static std::map<std::string, GLuint> sShaders;   // compiled shader per source text
 static GLuint sCurrentProg;
+GLuint GLES_CurrentProgram() { return sCurrentProg; }
 
 static const char* UnitSampler(int type)
 {
@@ -456,7 +457,10 @@ bool GLES_PrepareDraw()
   if (it == sPrograms.end())
   {
     it = sPrograms.insert(std::make_pair(k, Build(k, vp, fp))).first;
-    GLES_Log("GLES: program #%d built (vp %u, fp %u)", (int)sPrograms.size(), k.vp, k.fp);
+    // The fixed-function features in play, to see which paths a scene exercises.
+    unsigned texGen = 0;
+    for (int i = 0; i < GLES_MAX_UNITS; i++) if (k.ffp.texGenMode[i]) texGen |= 1u << i;
+    GLES_Log("GLES: program #%d built (vp %u, fp %u) texgen 0x%x lights 0x%x clip 0x%x fog %d alpha %d", (int)sPrograms.size(), k.vp, k.fp, texGen, k.ffp.lightMask, k.ffp.clipMask, k.ffp.fogMode, k.ffp.alphaTest);
   }
   SPipeProgram& p = it->second;
   if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; sProgramSwitches++; }

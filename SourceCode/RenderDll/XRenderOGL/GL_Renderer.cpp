@@ -25,6 +25,9 @@
 
 #include "../Common/Shadow_Renderer.h"
 #include "limits.h"
+#ifdef GLES_RENDERER
+#include "GLES/gles_layer.h"
+#endif
 
 int CGLRenderer::CV_gl_useextensions;
 int CGLRenderer::CV_gl_3dfx_gamma_control;
@@ -1148,6 +1151,8 @@ void CGLRenderer::Update()
   {
 #ifndef USE_SDL
     SwapBuffers(m_CurrContext->m_hDC);
+#elif defined(GLES_RENDERER)
+    GLES_SwapWindow(m_CurrContext->m_Window);
 #else
     SDL_GL_SwapWindow(m_CurrContext->m_Window);
 #endif
@@ -1186,6 +1191,15 @@ void CGLRenderer::Update()
 			float fNow = iTimer->GetAsyncCurTime();
 			if (fLast > 0) fprintf(stderr, "FPS: frame %d, %.1f fps over last %d frames\n", nFrame, nFpsEvery / (fNow - fLast), nFpsEvery);
 			fLast = fNow;
+			// FARCRY_DEPTH_PROBE=1: depth at a few pixels, to compare the GLES readback against GL.
+			if (getenv("FARCRY_DEPTH_PROBE"))
+			{
+				float d[3];
+				glReadPixels(m_width / 2, m_height / 2, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d[0]);
+				glReadPixels(m_width / 4, m_height / 4, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d[1]);
+				glReadPixels(m_width / 2, m_height - 8, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d[2]);
+				fprintf(stderr, "DEPTH: frame %d centre %.6f lower-left %.6f top %.6f\n", nFrame, d[0], d[1], d[2]);
+			}
 		}
 	}
 #endif

@@ -145,6 +145,12 @@ static void SetAttribConstant(int slot, float x, float y, float z, float w)
 // The renderer's own glBindBufferARB goes through the layer too; keep the shadow in step.
 void GLES_NoteArrayBufferBound(GLuint id) { sBoundArrayBuffer = id; }
 
+void GLES_SuspendAttribArrays(bool suspend)
+{
+  for (int i = 0; i < 16; i++)
+    if (sAttr[i].enabled) { if (suspend) es_glDisableVertexAttribArray(i); else es_glEnableVertexAttribArray(i); }
+}
+
 // Immediate-mode vertices stream through an orphaned VBO: client arrays cost a buffer allocation
 // per draw on ANGLE. Quads use a static index pattern.
 #define IM_VBO_BYTES (2 * 1024 * 1024)

@@ -21,4 +21,8 @@ void GLES_ReportUnimplemented();
 // Request an ES 3.0 context (and point SDL at ANGLE on macOS). Call before SDL_CreateWindow.
 void GLES_SetContextAttributes();
 
+// Present: the frame is drawn into the layer's scene framebuffer; this blits it to the window and swaps.
+struct SDL_Window;
+void GLES_SwapWindow(struct SDL_Window* win);
+
 #endif

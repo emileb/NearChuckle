@@ -797,6 +797,10 @@ bool CXGame::Update()
 		static int nFrame = 0;
 		if (nResumeFrame > 0 && ++nFrame >= nResumeFrame && m_bMenuOverlay && !m_bEditor && m_pClient && m_pClient->IsConnected())
 			MenuOff();
+		// FARCRY_QUIT_FRAME=<n>: clean shutdown at frame n, so logs and reports are flushed.
+		static int nQuitFrame = getenv("FARCRY_QUIT_FRAME") ? atoi(getenv("FARCRY_QUIT_FRAME")) : -1;
+		if (nQuitFrame > 0 && nFrame >= nQuitFrame && !m_pSystem->IsQuitting())
+			m_pSystem->Quit();
 	}
 #endif
 

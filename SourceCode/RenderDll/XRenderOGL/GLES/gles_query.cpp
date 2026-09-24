@@ -81,11 +81,17 @@ static void __stdcall gles_glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, 
   if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) { es_glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels); return; }
   if (format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX)
   {
-    static bool logged;
-    if (!logged) { logged = true; GLES_Log("GLES: glReadPixels of depth/stencil is not available on ES; returning far depth"); }
     int n = w * h;
-    if (type == GL_FLOAT) for (int i = 0; i < n; i++) ((float*)pixels)[i] = 1.0f;
-    else if (type == GL_UNSIGNED_BYTE) memset(pixels, 255, n);
+    std::vector<float> d(n, 1.0f);
+    if (format == GL_STENCIL_INDEX || !GLES_ReadDepth(x, y, w, h, &d[0]))
+    {
+      static bool logged;
+      if (!logged) { logged = true; GLES_Log("GLES: glReadPixels format 0x%x unavailable; returning far depth", format); }
+    }
+    if (type == GL_FLOAT) memcpy(pixels, &d[0], n * sizeof(float));
+    else if (type == GL_UNSIGNED_BYTE) for (int i = 0; i < n; i++) ((GLubyte*)pixels)[i] = (GLubyte)(d[i] * 255.0f + 0.5f);
+    else if (type == GL_UNSIGNED_SHORT) for (int i = 0; i < n; i++) ((GLushort*)pixels)[i] = (GLushort)(d[i] * 65535.0f + 0.5f);
+    else GLES_Log("GLES: glReadPixels depth type 0x%x unsupported", type);
     return;
   }
   if (type != GL_UNSIGNED_BYTE) { GLES_Log("GLES: glReadPixels type 0x%x unsupported", type); return; }

@@ -75,6 +75,19 @@
 #define ES_READ_FRAMEBUFFER             0x8CA8
 #define ES_COLOR_ATTACHMENT0            0x8CE0
 #define ES_FRAMEBUFFER_COMPLETE         0x8CD5
+#define ES_DRAW_FRAMEBUFFER             0x8CA9
+#define ES_FRAMEBUFFER_BINDING          0x8CA6
+#define ES_RENDERBUFFER                 0x8D41
+#define ES_DEPTH_STENCIL_ATTACHMENT     0x821A
+#define ES_DEPTH24_STENCIL8             0x88F0
+#define ES_DEPTH_STENCIL                0x84F9
+#define ES_UNSIGNED_INT_24_8            0x84FA
+#define ES_TEXTURE_COMPARE_MODE         0x884C
+#define ES_TEXTURE_COMPARE_FUNC         0x884D
+#define ES_COMPARE_REF_TO_TEXTURE       0x884E
+
+// Texture unit the layer uses for its own work, above the renderer's GLES_MAX_UNITS.
+#define GLES_SCRATCH_UNIT 15
 
 // Native ES entry points used by the layer. Loaded through SDL in GLES_LoadNative().
 #define ES_PROCS \
@@ -147,7 +160,17 @@
   ES_PROC(void, glDeleteFramebuffers, (GLsizei, const GLuint*)) \
   ES_PROC(void, glBindFramebuffer, (GLenum, GLuint)) \
   ES_PROC(void, glFramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint)) \
-  ES_PROC(GLenum, glCheckFramebufferStatus, (GLenum))
+  ES_PROC(GLenum, glCheckFramebufferStatus, (GLenum)) \
+  ES_PROC(void, glCopyTexImage2D, (GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint)) \
+  ES_PROC(void, glBlitFramebuffer, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
+  ES_PROC(void, glGenRenderbuffers, (GLsizei, GLuint*)) \
+  ES_PROC(void, glDeleteRenderbuffers, (GLsizei, const GLuint*)) \
+  ES_PROC(void, glBindRenderbuffer, (GLenum, GLuint)) \
+  ES_PROC(void, glRenderbufferStorage, (GLenum, GLenum, GLsizei, GLsizei)) \
+  ES_PROC(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
+  ES_PROC(void, glGetBooleanv, (GLenum, GLboolean*)) \
+  ES_PROC(void, glViewport, (GLint, GLint, GLsizei, GLsizei)) \
+  ES_PROC(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))
 
 #define ES_PROC(ret, name, params) typedef ret (*PFN_##name) params; extern PFN_##name es_##name;
 ES_PROCS
@@ -296,6 +319,15 @@ const float* GLES_CurrentMVP();
 void GLES_MatrixMultiply(const float* a, const float* b, float* out);
 bool GLES_MatrixInvert(const float* m, float* out);
 STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget);
+int GLES_NativeActiveUnit();
+GLuint GLES_CurrentProgram();
+// Disable/re-enable the enabled attribute arrays around a draw of the layer's own (shadow untouched).
+void GLES_SuspendAttribArrays(bool suspend);
+
+// Scene framebuffer (gles_fbo.cpp)
+bool GLES_SceneFBOEnsure(int w, int h);
+bool GLES_ReadDepth(int x, int y, int w, int h, float* out);
+bool GLES_CopySceneDepth(GLuint tex, GLenum target, int level, int x, int y, int w, int h);
 void GLES_Log(const char* fmt, ...);
 
 // Development timing counters (FARCRY_GLES_DEBUG), reported every 300 frames.

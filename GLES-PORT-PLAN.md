@@ -265,15 +265,34 @@ the translator, against a 46k-line renderer that stays intact until Phase 6.
 - **Phase 3 done (unverified paths).** Fixed-function texgen, lighting and clip planes
   are generated; the Pier view does not exercise them, so they await a scene that
   does (vehicle windows use reflection texgen with GL lighting).
-- **Phase 4 partly done.** Occlusion queries, `glGetTexImage`, `glReadPixels`
+- **Phase 4 done.** Occlusion queries, `glGetTexImage`, `glReadPixels`
   conversions, and CPU S3TC compression with CPU mip chains (needed because the
   renderer asks the driver to compress and to mipmap, and the texture streamer
-  reads the blocks back). Still open: depth readback (sun/flare probes read
-  1.0 for now), shadow maps through an FBO depth texture, `glCopyTexImage2D`.
-- **Performance.** Pier view: 163 fps on GLES/ANGLE against 188 on the GL
+  reads the blocks back). The frame is drawn into a layer-owned scene
+  framebuffer (`GLES/gles_fbo.cpp`: RGBA8 colour, DEPTH24_STENCIL8 texture)
+  and blitted to the window from `GLES_SwapWindow`, which the renderer calls
+  in place of `SDL_GL_SwapWindow`. That gives ES what the window cannot:
+  `glReadPixels(GL_DEPTH_COMPONENT)` runs a full-screen pass that packs the
+  depth texture into 24-bit RGBA for a small readable target (the flare and
+  sun probes; `FARCRY_DEPTH_PROBE=1` prints three pixels on either renderer
+  and they match GL to six decimals), `glCopyTexImage2D` of colour is native
+  and of a depth format allocates a DEPTH24_STENCIL8 texture and blits into
+  it. The shadow-map depth path also needs the SGIX extension strings; the
+  reference GL renderer on macOS has neither, so they are advertised only
+  with `FARCRY_GLES_DEPTHMAPS=1`, and that path has not yet met a scene that
+  renders a shadow map. The whole Pier run reaches no stub entry point.
+- **Phase 5 done.** `tools/gles-compare.sh <game dir> <map> [frame]` renders
+  the frame on both renderers (`FARCRY_QUIT_FRAME=n` ends a run cleanly, so
+  the layer's shutdown report of stub hits is in the log) and
+  `tools/imgdiff.py` reports the mean absolute difference with a
+  side-by-side image. Pier at frame 1300: 1.9 to 3.0 depending on the moving
+  character, against 0 for identical frames.
+- **Performance.** Pier view: 180 to 190 fps on GLES/ANGLE against 188 on the GL
   renderer, after streaming immediate-mode vertices through an unsynchronized
-  ring VBO (client arrays cost ~100 us per draw on ANGLE) and shadowing
-  attribute, buffer, texture and env-upload state. `FARCRY_FPS_EVERY=n` prints
-  the rate; `FARCRY_GLES_DEBUG` prints per-path timing every 300 frames.
-- **Next:** the screenshot-diff harness (Phase 5), the open Phase 4 items, then
-  Phase 6 and the Android module.
+  ring VBO (client arrays cost ~100 us per draw on ANGLE), shadowing
+  attribute, buffer, texture and env-upload state, and rendering through the
+  scene framebuffer. `FARCRY_FPS_EVERY=n` prints the rate; `FARCRY_GLES_DEBUG`
+  prints per-path timing every 300 frames.
+- **Next:** find scenes for the Phase 3 paths (every new program logs its
+  texgen, light, clip, fog and alpha-test bits), then Phase 6 and the Android
+  module.

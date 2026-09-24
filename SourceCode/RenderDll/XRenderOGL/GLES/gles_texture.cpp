@@ -44,6 +44,7 @@ void GLES_NativeBindTexture(int unit, GLenum target, GLuint id)
 
 // The renderer's own glActiveTextureARB is forwarded natively; keep the shadow in step.
 void GLES_NoteActiveUnit(int unit) { sNativeActiveUnit = unit; }
+int GLES_NativeActiveUnit() { return sNativeActiveUnit; }
 
 static STextureObj& Obj(GLuint id, GLenum target)
 {
@@ -223,6 +224,14 @@ static void ApplySwizzle(STextureObj& o, const char* sw)
 }
 
 static bool IsS3TC(GLenum f) { return f >= ES_COMPRESSED_RGB_S3TC_DXT1 && f <= ES_COMPRESSED_RGBA_S3TC_DXT5; }
+static bool IsDepthFormat(GLenum f) { return f == GL_DEPTH_COMPONENT || (f >= 0x81A5 && f <= 0x81A7) /* DEPTH_COMPONENT16/24/32 */; }
+
+// Depth textures are allocated in the scene framebuffer's format so its depth can be blitted into them.
+static void AllocDepthTexture(STextureObj& o, GLenum nativeTarget, GLint level, GLsizei w, GLsizei h)
+{
+  es_glTexImage2D(nativeTarget, level, ES_DEPTH24_STENCIL8, w, h, 0, ES_DEPTH_STENCIL, ES_UNSIGNED_INT_24_8, NULL);
+  ApplySwizzle(o, "rrr1");
+}
 
 static bool NativeS3TC()
 {
@@ -299,6 +308,14 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
       lw = nw; lh = nh; lvl++;
     }
     if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+    return;
+  }
+  if (IsDepthFormat(internalFormat))
+  {
+    if (pixels) GLES_Log("GLES: glTexImage2D with depth data is not supported (tex %u)", o->id);
+    AllocDepthTexture(*o, nativeTargetC, level, w, h);
+    if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+    if (level >= o->levels) o->levels = level + 1;
     return;
   }
   SFormat f;
@@ -380,7 +397,36 @@ static void __stdcall gles_glCopyTexSubImage2D(GLenum target, GLint level, GLint
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  if (IsDepthFormat(o->internalFormat))
+  {
+    if (xo || yo) GLES_Log("GLES: glCopyTexSubImage2D of depth with an offset is not supported");
+    else GLES_CopySceneDepth(o->id, nativeTarget, level, x, y, w, h);
+    return;
+  }
   es_glCopyTexSubImage2D(nativeTarget, level, xo, yo, x, y, w, h);
+}
+
+static void __stdcall gles_glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x, GLint y, GLsizei w, GLsizei h, GLint)
+{
+  SESTimer timer(GLES_T_COPYTEX);
+  STextureObj* o = BindForEdit(target);
+  if (!o) return;
+  GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  if (IsDepthFormat(internalFormat))
+  {
+    AllocDepthTexture(*o, nativeTarget, level, w, h);
+    GLES_CopySceneDepth(o->id, nativeTarget, level, x, y, w, h);
+  }
+  else
+  {
+    SFormat f;
+    if (!MapInternalFormat(internalFormat, f)) { GLES_Log("GLES: glCopyTexImage2D internal format 0x%x unsupported", internalFormat); return; }
+    es_glCopyTexImage2D(nativeTarget, level, f.internal, x, y, w, h, 0);
+    ApplySwizzle(*o, f.swizzle);
+  }
+  if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
+  if (level >= o->levels) o->levels = level + 1;
+  if (level == 0 && o->generateMipmap && !IsDepthFormat(internalFormat)) es_glGenerateMipmap(o->target);
 }
 
 static void TexParam(GLenum target, GLenum pname, GLint iparam, GLfloat fparam)
@@ -402,6 +448,16 @@ static void TexParam(GLenum target, GLenum pname, GLint iparam, GLfloat fparam)
       return;
     case ES_TEXTURE_MAX_ANISOTROPY:
       if (GLES_HasNativeExt("GL_EXT_texture_filter_anisotropic")) es_glTexParameterf(o->target, pname, fparam);
+      return;
+    // Shadow compare: SGIX names mapped, ARB names are the ES values.
+    case 0x819A /* GL_TEXTURE_COMPARE_SGIX */:
+      es_glTexParameteri(o->target, ES_TEXTURE_COMPARE_MODE, iparam ? ES_COMPARE_REF_TO_TEXTURE : GL_NONE);
+      return;
+    case 0x819B /* GL_TEXTURE_COMPARE_OPERATOR_SGIX */:
+      es_glTexParameteri(o->target, ES_TEXTURE_COMPARE_FUNC, iparam == 0x819D /* GEQUAL_R */ ? GL_GEQUAL : GL_LEQUAL);
+      return;
+    case ES_TEXTURE_COMPARE_MODE: case ES_TEXTURE_COMPARE_FUNC:
+      es_glTexParameteri(o->target, pname, iparam);
       return;
     // border colour, priority, LOD bias: nothing to do on ES
   }
@@ -447,7 +503,7 @@ void GLES_RegisterTexture(std::map<std::string, void*>& t)
 {
 #define REG(name) t[#name] = (void*)gles_##name;
   REG(glBindTexture) REG(glDeleteTextures) REG(glTexImage2D) REG(glTexSubImage2D)
-  REG(glCompressedTexImage2DARB) REG(glCompressedTexSubImage2DARB) REG(glCopyTexSubImage2D)
+  REG(glCompressedTexImage2DARB) REG(glCompressedTexSubImage2DARB) REG(glCopyTexSubImage2D) REG(glCopyTexImage2D)
   REG(glTexParameteri) REG(glTexParameterf) REG(glTexParameteriv) REG(glTexParameterfv)
   REG(glGetTexLevelParameteriv) REG(glPrioritizeTextures) REG(glAreTexturesResident) REG(glGetCompressedTexImageARB)
 #undef REG
