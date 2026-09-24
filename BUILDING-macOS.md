@@ -90,6 +90,12 @@ truncations that happened to survive there.
 
 ## Engine fixes found while playing on this port
 
+- **Single player ran the multiplayer fixed-step physics.** `CXGame::Update`
+  passed `ESYSUPDATE_MULTIPLAYER` unconditionally (a `#if 1` over the intended
+  `IsMultiplayer()` test), so rigid bodies advanced in 10 ms quanta with
+  catch-up and no interpolation: at 60 fps a vehicle moved two, two, one
+  quanta per frame, and at 300 fps only every third frame. Single player now
+  steps physics by the frame time; multiplayer keeps the fixed step.
 - **`g_maxfps` settled near twice the requested rate** because the sleep was
   counted into the next frame's time; it now paces against a deadline.
 - **Camera tracing:** `FARCRY_CAMLOG=1` prints the player camera update, the

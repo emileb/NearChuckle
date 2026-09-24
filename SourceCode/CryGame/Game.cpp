@@ -929,12 +929,11 @@ bool CXGame::Update()
 		fov = pVarFOV->GetFVal();
 	}
 	
+	// The multiplayer flag selects fixed-step (g_MP_fixed_timestep) physics with catch-up and no
+	// interpolation: rigid bodies then move in 10 ms quanta, visible as vehicle jitter. Only the
+	// networked game needs that determinism; single player steps physics by the frame time.
 	if (!m_pSystem->Update(
-#if 1
-		ESYSUPDATE_MULTIPLAYER,
-#else
 		IsMultiplayer() ? ESYSUPDATE_MULTIPLAYER:0,
-#endif
 		nPauseMode)) //Update returns false when quitting
 		return (false);
 
