@@ -88,6 +88,13 @@ build; see `SourceCode/AMD64_ProjectFiles_VS2005` and `BinWin64`), and this port
 is built and played on x86_64 Linux. The pointer casts fixed above were latent
 truncations that happened to survive there.
 
+## Engine fixes found while playing on this port
+
+- **Camera tracing:** `FARCRY_CAMLOG=1` prints the player camera update, the
+  third-person camera maths, the eye offset and physics orientation, the
+  vehicle's physics state and the view camera handed to the renderer, one
+  line each per frame, to stderr.
+
 ## Known leftovers
 
 - CMake still passes `-D_AMD64_` on arm64 because `CPUDetect.h` refuses to build
