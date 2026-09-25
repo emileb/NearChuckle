@@ -453,6 +453,12 @@ ICVar* CSystem::attachVariable (const char* szVarName, int* pContainer, const ch
 }
 
 /////////////////////////////////////////////////////////////////////////////////
+#ifdef __ANDROID__
+// Game surface size from the OpenTouch JNI glue in libfarcry.so.
+extern "C" int game_screen_width;
+extern "C" int game_screen_height;
+#endif
+
 bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdLine)
 {
   CreateRendererVars();
@@ -513,6 +519,13 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 			fclose(fp);
 		}
 	}
+#endif
+
+#ifdef __ANDROID__
+	// The window is always the whole game surface, sized by the host glue.
+	m_rWidth->Set(game_screen_width);
+	m_rHeight->Set(game_screen_height);
+	m_rFullscreen->Set(1);
 #endif
 
 	if (!OpenRenderLibrary(m_rDriver->GetString()))

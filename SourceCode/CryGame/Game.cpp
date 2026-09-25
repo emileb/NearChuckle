@@ -785,6 +785,59 @@ bool CXGame::IsInPause(IProcess *pProcess)
 #include <unistd.h>
 #endif
 
+#ifdef __ANDROID__
+#include "farcry_bridge.h"
+
+// Touch input for this frame, drained every frame so nothing stale fires later.
+static FarCryTouchInput s_TouchInput;
+
+// Turn the drained touch state into client actions by name (docs/porting/phase2.md).
+static void ApplyTouchInput(CXClient* pClient, ISystem* pSystem)
+{
+	const FarCryTouchInput& in = s_TouchInput;
+	if (in.moveFwd != 0.0f)
+		pClient->OnAction(ACTION_MOVEFB, -in.moveFwd, etHolding); // negative is forward
+	if (in.moveSide != 0.0f)
+		pClient->OnAction(ACTION_MOVELR, in.moveSide, etHolding);
+
+	static const XACTIONID held[FC_HELD_COUNT] = {
+		ACTION_FIRE0, ACTION_JUMP, ACTION_MOVEMODE, ACTION_RUNSPRINT, ACTION_WALK,
+		ACTION_LEANLEFT, ACTION_LEANRIGHT, ACTION_FIRE_GRENADE };
+	for (int i = 0; i < FC_HELD_COUNT; i++)
+		if (in.held & (1u << i))
+			pClient->OnAction(held[i], 1.0f, etHolding);
+
+	for (int i = 0; i < in.impulseCount; i++)
+	{
+		int imp = in.impulses[i];
+		if (imp >= FC_IMP_WEAPON_0 && imp <= FC_IMP_WEAPON_0 + 8)
+		{
+			pClient->OnAction(ACTION_WEAPON_0 + (imp - FC_IMP_WEAPON_0), 1.0f, etPressing);
+			continue;
+		}
+		switch (imp)
+		{
+			case FC_IMP_USE:           pClient->OnAction(ACTION_USE, 1.0f, etPressing); break;
+			case FC_IMP_RELOAD:        pClient->OnAction(ACTION_RELOAD, 1.0f, etPressing); break;
+			case FC_IMP_FLASHLIGHT:    pClient->OnAction(ACTION_FLASHLIGHT, 1.0f, etPressing); break;
+			case FC_IMP_NEXT_WEAPON:   pClient->OnAction(ACTION_NEXT_WEAPON, 1.0f, etPressing); break;
+			case FC_IMP_PREV_WEAPON:   pClient->OnAction(ACTION_PREV_WEAPON, 1.0f, etPressing); break;
+			case FC_IMP_CROUCH_TOGGLE: pClient->OnAction(ACTION_MOVEMODE_TOGGLE, 1.0f, etPressing); break;
+			case FC_IMP_PRONE:         pClient->OnAction(ACTION_MOVEMODE2, 1.0f, etPressing); break;
+			case FC_IMP_ZOOM_TOGGLE:   pClient->OnAction(ACTION_ZOOM_TOGGLE, 1.0f, etPressing); break;
+			case FC_IMP_BINOCULARS:    pClient->OnAction(ACTION_ITEM_0, 1.0f, etPressing); break;
+			case FC_IMP_FIREMODE:      pClient->OnAction(ACTION_FIREMODE, 1.0f, etPressing); break;
+			case FC_IMP_CYCLE_GRENADE: pClient->OnAction(ACTION_CYCLE_GRENADE, 1.0f, etPressing); break;
+			case FC_IMP_DROP_WEAPON:   pClient->OnAction(ACTION_DROPWEAPON, 1.0f, etPressing); break;
+			case FC_IMP_CHANGE_VIEW:   pClient->OnAction(ACTION_CHANGE_VIEW, 1.0f, etPressing); break;
+			// Not in the action map; the F5/F6 triggers the client keeps for them.
+			case FC_IMP_QUICKSAVE:     pClient->TriggerQuickSave(1.0f, etPressing); break;
+			case FC_IMP_QUICKLOAD:     pClient->TriggerQuickLoad(1.0f, etPressing); break;
+			default: break;
+		}
+	}
+}
+#endif
 
 #ifdef LINUX
 
@@ -965,6 +1018,16 @@ bool CXGame::Update()
 	}
 #endif
 
+#ifdef __ANDROID__
+	{
+		bool bInGame = !m_bMenuOverlay && !m_bEditor && m_pClient && m_pClient->IsConnected();
+		FarCry_ReportScreenMode(bInGame, m_pSystem->GetIConsole()->GetStatus());
+		FarCry_DrainTouchInput(&s_TouchInput, m_pSystem->GetITimer()->GetFrameTime());
+		if (!bInGame)
+			s_TouchInput.impulseCount = 0;
+	}
+#endif
+
 	if (!m_bEditor)
 	{
 		if (!m_bMenuOverlay || !m_pUISystem || m_pUISystem->GetScriptObjectUI()->CanRenderGame())
@@ -1135,6 +1198,10 @@ bool CXGame::Update()
 			pTimer->MeasureTime("Net");
 
 			assert(m_pClient);
+#ifdef __ANDROID__
+			if (!m_bMenuOverlay && !m_bEditor && m_pClient->IsConnected())
+				ApplyTouchInput(m_pClient, m_pSystem);
+#endif
 			m_pClient->Update();
 			
 			if(m_pClient->DestructIfMarked())			//  to make sure the client is only released in one place - here
@@ -2280,9 +2347,64 @@ ITagPointManager* CXGame::GetTagPointManager()
 	return m_pTagPointManager;
 }
 
+#ifdef __ANDROID__
+// First run: copy the game folder's Profiles/Player (default profile, its checkpoint saves and
+// cfgs) into the user folder, so the profile screen has something to show.
+static void CopyTree(const string& sSrc, const string& sDst)
+{
+	mkdir(sDst.c_str(), 0755);
+	DIR* pDir = opendir(sSrc.c_str());
+	if (!pDir)
+		return;
+	while (struct dirent* d = readdir(pDir))
+	{
+		if (d->d_name[0] == '.')
+			continue;
+		string sFrom = sSrc + "/" + d->d_name, sTo = sDst + "/" + d->d_name;
+		// FUSE storage reports DT_UNKNOWN, so ask stat.
+		struct stat st;
+		if (d->d_type == DT_DIR || (d->d_type == DT_UNKNOWN && stat(sFrom.c_str(), &st) == 0 && S_ISDIR(st.st_mode)))
+		{
+			CopyTree(sFrom, sTo);
+			continue;
+		}
+		FILE* fIn = fopen(sFrom.c_str(), "rb");
+		if (!fIn)
+			continue;
+		if (FILE* fOut = fopen(sTo.c_str(), "wb"))
+		{
+			char buf[65536];
+			size_t n;
+			while ((n = fread(buf, 1, sizeof(buf), fIn)) > 0)
+				fwrite(buf, 1, n, fOut);
+			fclose(fOut);
+		}
+		fclose(fIn);
+	}
+	closedir(pDir);
+}
+#endif
+
 string CXGame::GetPlayerProfilePath()
 {
-#ifdef LINUX
+#ifdef __ANDROID__
+	static string sProfiles;
+	if (sProfiles.empty())
+	{
+		char szPath[1024];
+		CryUserFile("Profiles/Player/", szPath, sizeof(szPath));
+		sProfiles = szPath;
+		m_pSystem->GetIPak()->MakeDir(szPath); // nested; CopyTree's mkdir is not
+		struct stat st;
+		char szSrc[1024];
+		if (stat((sProfiles + "default").c_str(), &st) != 0 && casepath("Profiles/Player", szSrc))
+		{
+			printf("Seeding player profiles from %s\n", szSrc);
+			CopyTree(szSrc, sProfiles.substr(0, sProfiles.length() - 1));
+		}
+	}
+	return sProfiles;
+#elif defined(LINUX)
 	DIR *fdir;
 	int found_profiles = 0;
 	int found_player = 0;

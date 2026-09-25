@@ -9,10 +9,11 @@
 #include "gles_layer.h"
 #include "gles_arb.h"
 #include <signal.h>
+#include <unistd.h>
+#ifndef __ANDROID__
 #include <execinfo.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
-#include <unistd.h>
 
 // Development aid: print a native backtrace on a crash, since the engine has no handler on POSIX.
 static void CrashHandler(int sig, siginfo_t* info, void* ctx)
@@ -33,6 +34,7 @@ static void CrashHandler(int sig, siginfo_t* info, void* ctx)
   signal(sig, SIG_DFL);
   raise(sig);
 }
+#endif
 
 //////////////////////////////////////////////////////////////////////////
 // Stubs: one per entry in GLFuncs.h, generated with the X-macro.
@@ -157,12 +159,15 @@ static std::map<std::string, void*>& ImplTable()
 
 bool GLES_Init()
 {
+#ifndef __ANDROID__
+  // bionic has no execinfo; Android's runtime writes tombstones instead.
   struct sigaction sa = {};
   sa.sa_sigaction = CrashHandler;
   sa.sa_flags = SA_SIGINFO;
   sigaction(SIGSEGV, &sa, NULL);
   sigaction(SIGBUS, &sa, NULL);
   sigaction(SIGABRT, &sa, NULL);
+#endif
   if (!GLES_LoadNative())
     return false;
   GLES_InitState();

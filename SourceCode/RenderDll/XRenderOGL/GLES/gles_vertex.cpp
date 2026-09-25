@@ -181,7 +181,11 @@ static GLuint sImVBO, sImOffset = IM_VBO_BYTES, sQuadIBO;
 // 40 with glBufferData per draw and 52 with client arrays (Note 20 Ultra). FARCRY_GLES_IMMODE:
 // 0 subdata ring, 1 bufferdata per draw, 2 unsynchronized map ring, 3 client arrays, 4 the persistent
 // ring shared with map mode 4 (GL_EXT_buffer_storage; falls back to 3 without it).
+#ifdef __ANDROID__
+#define IM_MODE_DEFAULT 3
+#else
 #define IM_MODE_DEFAULT 2
+#endif
 static int ImMode()
 {
   static int mode = getenv("FARCRY_GLES_IMMODE") ? atoi(getenv("FARCRY_GLES_IMMODE")) : IM_MODE_DEFAULT;
@@ -377,7 +381,11 @@ static void __stdcall gles_glBindBufferARB(GLenum target, GLuint id)
 // the Android default where the extension exists, mode 1 the fallback.
 static int MapMode()
 {
+#ifdef __ANDROID__
+  static int mode = getenv("FARCRY_GLES_MAPMODE") ? atoi(getenv("FARCRY_GLES_MAPMODE")) : 4;
+#else
   static int mode = getenv("FARCRY_GLES_MAPMODE") ? atoi(getenv("FARCRY_GLES_MAPMODE")) : 0;
+#endif
   return mode;
 }
 

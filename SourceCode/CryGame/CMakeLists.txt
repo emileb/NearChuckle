@@ -148,4 +148,10 @@ else()
 if (NOT DISABLE_FFMPEG)
 target_link_libraries(${PROJECT_NAME} PRIVATE avutil avformat swscale)
 endif()
+if (ANDROID)
+# CS_Stream_* live in CrySoundSystem; the Android linker resolves nothing lazily.
+# farcry (the launcher) carries the touch input bridge, farcry_bridge.h.
+target_link_libraries(${PROJECT_NAME} PRIVATE CrySoundSystem farcry)
+target_include_directories(${PROJECT_NAME} PRIVATE ${farcry_SOURCE_DIR}/SourceCode/FARCRY/mobile)
+endif()
 endif()

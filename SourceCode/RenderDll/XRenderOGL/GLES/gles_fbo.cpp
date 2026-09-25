@@ -78,6 +78,47 @@ bool GLES_SceneFBOEnsure(int w, int h)
   return true;
 }
 
+#ifdef __ANDROID__
+// The touch overlay draws from inside SDL_GL_SwapWindow (a swap callback in the OpenTouch SDL fork)
+// with its own program, attributes, buffers, texture unit 0 and fixed state, and none of the
+// layer's shadows see it. Snapshot the native state it touches and put everything back afterwards.
+struct SOverlaySaved
+{
+  GLboolean blend, cull, depth, scissor, depthMask;
+  GLint blendSrc, blendDst, elementBuffer, viewport[4], scissorBox[4];
+};
+
+static void SaveForOverlay(SOverlaySaved& s)
+{
+  s.blend = es_glIsEnabled(GL_BLEND);
+  s.cull = es_glIsEnabled(GL_CULL_FACE);
+  s.depth = es_glIsEnabled(GL_DEPTH_TEST);
+  s.scissor = es_glIsEnabled(GL_SCISSOR_TEST);
+  es_glGetBooleanv(GL_DEPTH_WRITEMASK, &s.depthMask);
+  es_glGetIntegerv(0x80C9 /*GL_BLEND_SRC_RGB*/, &s.blendSrc);
+  es_glGetIntegerv(0x80C8 /*GL_BLEND_DST_RGB*/, &s.blendDst);
+  es_glGetIntegerv(0x8895 /*GL_ELEMENT_ARRAY_BUFFER_BINDING*/, &s.elementBuffer);
+  es_glGetIntegerv(GL_VIEWPORT, s.viewport);
+  es_glGetIntegerv(GL_SCISSOR_BOX, s.scissorBox);
+}
+
+static void RestoreAfterOverlay(const SOverlaySaved& s)
+{
+  if (s.blend) es_glEnable(GL_BLEND); else es_glDisable(GL_BLEND);
+  if (s.cull) es_glEnable(GL_CULL_FACE); else es_glDisable(GL_CULL_FACE);
+  if (s.depth) es_glEnable(GL_DEPTH_TEST); else es_glDisable(GL_DEPTH_TEST);
+  if (s.scissor) es_glEnable(GL_SCISSOR_TEST); else es_glDisable(GL_SCISSOR_TEST);
+  es_glDepthMask(s.depthMask);
+  es_glBlendFunc(s.blendSrc, s.blendDst);
+  es_glBindBuffer(ES_ELEMENT_ARRAY_BUFFER, s.elementBuffer);
+  es_glViewport(s.viewport[0], s.viewport[1], s.viewport[2], s.viewport[3]);
+  es_glScissor(s.scissorBox[0], s.scissorBox[1], s.scissorBox[2], s.scissorBox[3]);
+  GLES_ReissueProgram();
+  GLES_ReissueAttribArrays();
+  GLES_ReissueTextureUnit0();
+}
+#endif
+
 void GLES_SwapWindow(SDL_Window* win)
 {
   extern bool g_esDumpDraw;
@@ -134,7 +175,14 @@ void GLES_SwapWindow(SDL_Window* win)
     }
     if (scissor) es_glEnable(GL_SCISSOR_TEST);
   }
+#ifdef __ANDROID__
+  SOverlaySaved saved;
+  SaveForOverlay(saved);
   SDL_GL_SwapWindow(win);
+  RestoreAfterOverlay(saved);
+#else
+  SDL_GL_SwapWindow(win);
+#endif
   EnsureScene(pw, ph);
   es_glBindFramebuffer(ES_FRAMEBUFFER, sSceneFBO);
 }

@@ -1664,6 +1664,14 @@ void CXGame::SaveConfiguration( const char *pszSystemCfg,const char *pszGameCfg,
 		sSystemCfg=path+sProfileName+"_"+sSystemCfg;
 		sGameCfg=path+sProfileName+"_"+sGameCfg;
 	}
+#ifdef __ANDROID__
+	else
+	{
+		char szBuf[1024];
+		sSystemCfg = CryUserFile(sSystemCfg.c_str(), szBuf, sizeof(szBuf));
+		sGameCfg = CryUserFile(sGameCfg.c_str(), szBuf, sizeof(szBuf));
+	}
+#endif
 
 	FILE *pFile=fxopen(sSystemCfg.c_str(), "wb");
 	if (pFile)
@@ -1717,6 +1725,14 @@ void CXGame::SaveConfiguration( const char *pszSystemCfg,const char *pszGameCfg,
 void CXGame::LoadConfiguration(const string &sSystemCfgIn,const string &sGameCfgIn)
 {			
 	string sSystemCfg = sSystemCfgIn, sGameCfg = sGameCfgIn;
+#ifdef __ANDROID__
+	// Bare names are the non-profile files, which SaveConfiguration writes to the user folder.
+	char szBuf[1024];
+	if (!strchr(sSystemCfg.c_str(), '/'))
+		sSystemCfg = CryUserFile(sSystemCfg.c_str(), szBuf, sizeof(szBuf));
+	if (!strchr(sGameCfg.c_str(), '/'))
+		sGameCfg = CryUserFile(sGameCfg.c_str(), szBuf, sizeof(szBuf));
+#endif
 	m_pSystem->LoadConfiguration(sSystemCfg);
 
 	FILE *pFile=fxopen(sGameCfg.c_str(), "rb");
@@ -1834,6 +1850,14 @@ void CXGame::RemoveConfiguration(string &sSystemCfg,string &sGameCfg,const char 
 		sSystemCfg=path+sProfileName+"_"+sSystemCfg;
 		sGameCfg=path+sProfileName+"_"+sGameCfg;
 	}
+#ifdef __ANDROID__
+	else
+	{
+		char szBuf[1024];
+		sSystemCfg = CryUserFile(sSystemCfg.c_str(), szBuf, sizeof(szBuf));
+		sGameCfg = CryUserFile(sGameCfg.c_str(), szBuf, sizeof(szBuf));
+	}
+#endif
 	
 #if defined(LINUX)
 	remove( sSystemCfg.c_str() ); 
