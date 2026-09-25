@@ -32,7 +32,11 @@
 #endif
 
 #ifdef LINUX
+#ifdef __ANDROID__
+#include <dirent.h>
+#else
 #include <sys/dir.h>
+#endif
 #include <unistd.h>
 #else
 #	include <direct.h>

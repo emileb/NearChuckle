@@ -2566,6 +2566,12 @@ void CGLRenderer::ScreenShot(const char *filename)
   if (!filename)
   {           
     strcpy(scname,"FarCry00.jpg");
+#ifdef __ANDROID__
+    char szDir[1024];
+    CryUserFile("screenshots", szDir, sizeof(szDir));
+    mkdir(szDir, 0755);
+    snprintf(scname, sizeof(scname), "%s/FarCry00.jpg", szDir);
+#endif
     char *szDigits = scname + strlen(scname) - 6;
       
     for (i=0 ; i<=99 ; i++) 

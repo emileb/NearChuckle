@@ -85,7 +85,7 @@ inline int IsHeapValid ()
 #define TEXT
 
 #ifndef __cplusplus
-#if !defined(_WCHAR_T_DEFINED) && !defined(__APPLE__)
+#if !defined(_WCHAR_T_DEFINED) && !defined(__APPLE__) && !defined(__ANDROID__)
 typedef unsigned short wchar_t;
 #define TCHAR wchar_t;
 #define _WCHAR_T_DEFINED
@@ -203,6 +203,31 @@ typedef struct in_addr_windows
 #define _finite isfinite
 #define stat64 stat
 #define fstat64 fstat
+#elif defined(__ANDROID__)
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+// Sigma Touch: everything the game writes lives under $USER_FILES/farcry, never in the
+// game folder (docs/porting/phase2.md). Without USER_FILES it falls back to the cwd.
+inline const char* CryUserDir()
+{
+	static char szDir[1024];
+	if (!szDir[0])
+	{
+		const char* szUser = getenv("USER_FILES");
+		snprintf(szDir, sizeof(szDir), "%s/farcry", szUser && szUser[0] ? szUser : ".");
+		mkdir(szDir, 0755);
+	}
+	return szDir;
+}
+inline const char* CryUserFile(const char* szRelative, char* szOut, size_t nOut)
+{
+	snprintf(szOut, nOut, "%s/%s", CryUserDir(), szRelative);
+	return szOut;
+}
+// bionic has no __finite
+#define _finite isfinite
+#define __finite isfinite
 #else
 #define _finite __finite
 #endif
