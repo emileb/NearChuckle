@@ -38,6 +38,19 @@ static MoviePlayerData* CreatePlayerData(const char* filename)
 	ICryPak* iPak = GetISystem()->GetIPak();
 	char* corrected = (char*)alloca(strlen(filename) + 3);
 	player->looping = 0;
+#ifdef __ANDROID__
+	// Bink opens the file itself: build the full path on the game root (secondary storage has no cwd).
+	char szFull[1024];
+	if (CryGameRoot() && filename[0] != '/')
+	{
+		snprintf(szFull, sizeof(szFull), "%s/%s", CryGameRoot(), filename);
+		for (char* p = szFull; *p; p++)
+			if (*p == '\\')
+				*p = '/';
+		filename = szFull;
+		corrected = (char*)alloca(strlen(filename) + 3);
+	}
+#endif
 	if (casepath(filename, corrected))
 	{
 		player->binkHandle = Bink_Open( corrected );
