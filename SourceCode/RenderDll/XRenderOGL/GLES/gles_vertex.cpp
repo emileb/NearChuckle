@@ -347,6 +347,7 @@ static void __stdcall gles_glGenBuffersARB(GLsizei n, GLuint* ids) { es_glGenBuf
 static void __stdcall gles_glDeleteBuffersARB(GLsizei n, const GLuint* ids)
 {
   for (GLsizei i = 0; i < n; i++) g_esBuffers.erase(ids[i]);
+  GLES_ForgetBufferCache();
   es_glDeleteBuffers(n, ids);
 }
 static void __stdcall gles_glBindBufferARB(GLenum target, GLuint id)
@@ -385,6 +386,7 @@ static PFN_esClientWaitSync esClientWaitSync;
 static PFN_esDeleteSync esDeleteSync;
 
 struct SRingFrame { void* fence; size_t start, end; };
+struct SRingBack { GLuint id; size_t off; unsigned lap; }; // a whole buffer living in the ring
 struct SRing
 {
   GLenum target;
@@ -393,10 +395,12 @@ struct SRing
   size_t size, pos, frameStart;
   std::deque<SRingFrame> frames;
   int state; // 0 untried, 1 ready, -1 unavailable
+  unsigned lap;
+  std::deque<SRingBack> backs; // in ring order, so the front is the next to be overwritten
 };
 static SRing sRings[2] = { { ES_ARRAY_BUFFER, 0, NULL, 32u << 20, 0, 0, std::deque<SRingFrame>(), 0 }, { ES_ELEMENT_ARRAY_BUFFER, 0, NULL, 8u << 20, 0, 0, std::deque<SRingFrame>(), 0 } };
 
-static unsigned sRingPushes, sRingDirect; static size_t sRingBytes;
+static unsigned sRingPushes, sRingDirect, sRingSettles; static size_t sRingBytes;
 
 static bool RingReady(SRing& r)
 {
@@ -435,12 +439,28 @@ void GLES_RingEndFrame()
 {
   for (int i = 0; i < 2; i++) if (sRings[i].state > 0) RingCloseFrame(sRings[i]);
   static int frames; static unsigned pushes, direct; static size_t bytes;
-  pushes += sRingPushes; direct += sRingDirect; bytes += sRingBytes; sRingPushes = sRingDirect = 0; sRingBytes = 0;
+  static unsigned settles;
+  pushes += sRingPushes; direct += sRingDirect; settles += sRingSettles; bytes += sRingBytes; sRingPushes = sRingDirect = sRingSettles = 0; sRingBytes = 0;
   if (g_esDebug && ++frames % 300 == 0)
   {
-    GLES_Log("GLES: ring: %.1f pushes/frame (%.1f direct), %.0f KB/frame", pushes / 300.0, direct / 300.0, bytes / 300.0 / 1024.0);
-    pushes = direct = 0; bytes = 0;
+    GLES_Log("GLES: ring: %.1f pushes/frame (%.1f direct), %.0f KB/frame, %u settled", pushes / 300.0, direct / 300.0, bytes / 300.0 / 1024.0, settles);
+    pushes = direct = settles = 0; bytes = 0;
   }
+}
+
+// A buffer still backed by a ring region about to be reused (a mesh written once, drawn for many
+// frames) gets those bytes as its own storage; glBufferData copies them before the ring is written.
+static void RingSettle(SRing& r, const SRingBack& k)
+{
+  std::map<GLuint, SESBuffer>::iterator it = g_esBuffers.find(k.id);
+  if (it == g_esBuffers.end()) return;
+  SESBuffer& b = it->second;
+  if (!b.ringValid || &sRings[b.ringIndex] != &r || b.ringOffset != k.off || b.ringLap != k.lap) return;
+  es_glBindBuffer(0x8F37 /* COPY_WRITE_BUFFER */, k.id);
+  es_glBufferData(0x8F37, b.size, r.base + k.off, b.usage ? b.usage : ES_DYNAMIC_DRAW);
+  es_glBindBuffer(0x8F37, 0);
+  b.ringValid = false;
+  sRingSettles++;
 }
 
 // Returns the ring offset for `bytes`, or (size_t)-1 when the ring cannot take it.
@@ -449,7 +469,14 @@ static size_t RingAlloc(SRing& r, size_t bytes)
   if (!RingReady(r)) return (size_t)-1;
   bytes = (bytes + 15) & ~(size_t)15;
   if (bytes > r.size / 4) return (size_t)-1;
-  if (r.pos + bytes > r.size) { RingCloseFrame(r); r.pos = 0; r.frameStart = 0; }
+  if (r.pos + bytes > r.size) { RingCloseFrame(r); r.pos = 0; r.frameStart = 0; r.lap++; }
+  while (!r.backs.empty())
+  {
+    const SRingBack& k = r.backs.front();
+    if (k.lap == r.lap || (k.lap + 1 == r.lap && k.off >= r.pos + bytes)) break;
+    RingSettle(r, k);
+    r.backs.pop_front();
+  }
   // This frame's own earlier writes are never re-used before a wrap, so only older frames can overlap.
   while (!r.frames.empty())
   {
@@ -467,12 +494,21 @@ static size_t RingAlloc(SRing& r, size_t bytes)
 }
 
 // Mode 4 draw-time redirection: an array or index pointer into a ring-backed buffer binds the ring.
+// Last buffer ResolveRing looked up: a draw's attributes nearly always share one buffer.
+static GLuint sResolveId;
+static SESBuffer* sResolveBuf;
+void GLES_ForgetBufferCache() { sResolveId = 0; sResolveBuf = NULL; }
+
 static void ResolveRing(GLuint& buffer, const void*& ptr)
 {
   if (!buffer || MapMode() != 4) return;
-  std::map<GLuint, SESBuffer>::iterator it = g_esBuffers.find(buffer);
-  if (it == g_esBuffers.end()) return;
-  SESBuffer& b = it->second;
+  if (buffer != sResolveId)
+  {
+    std::map<GLuint, SESBuffer>::iterator it = g_esBuffers.find(buffer);
+    if (it == g_esBuffers.end()) return;
+    sResolveId = buffer; sResolveBuf = &it->second;
+  }
+  SESBuffer& b = *sResolveBuf;
   if (!b.ranges.empty())
   {
     size_t off = (uintptr_t)ptr;
@@ -501,6 +537,12 @@ unsigned char* GLES_RingImmediate(size_t bytes, size_t* off, GLuint* vbo)
   return sRings[0].base + r;
 }
 
+// Slices (ranges) are not settled when the ring wraps, so only STREAM buffers, re-specified per use
+// (the engine's per-frame vertex and index streams), are sliced; a DYNAMIC buffer lives there whole.
+static bool RingUsage(const SESBuffer& b) { return b.usage == ES_STREAM_DRAW; }
+static bool RingWholeUsage(const SESBuffer& b) { return b.usage == ES_STREAM_DRAW || b.usage == ES_DYNAMIC_DRAW; }
+static GLuint BoundBufferId(GLenum target) { return target == ES_ELEMENT_ARRAY_BUFFER ? g_es.elementBuffer : g_es.arrayBuffer; }
+
 // A slice of a dynamic buffer that the engine appends into: a fresh ring region, recorded for ResolveRing.
 // An offset below the last slice's end means the engine wrapped, so the older slices are finished with.
 static void* RingSlice(SESBuffer& b, GLenum target, size_t offset, size_t size)
@@ -522,7 +564,7 @@ void* GLES_MapBufferRange(GLenum target, size_t offset, size_t size)
 {
   if (MapMode() != 4 || !size) return NULL;
   SESBuffer& b = BoundBuffer(target);
-  if (!b.size || offset + size > b.size) return NULL;
+  if (!b.size || offset + size > b.size || !RingUsage(b)) return NULL;
   void* p = RingSlice(b, target, offset, size);
   if (p) b.rangeMapped = true;
   return p;
@@ -530,27 +572,34 @@ void* GLES_MapBufferRange(GLenum target, size_t offset, size_t size)
 
 static bool RingPush(SESBuffer& b, GLenum target)
 {
+  if (!RingWholeUsage(b)) return false;
   int ri = (target == ES_ELEMENT_ARRAY_BUFFER) ? 1 : 0;
+  // Taken first: the allocation may settle this very buffer, and may land on its old region (hence memmove).
+  const unsigned char* old = b.ringValid ? sRings[b.ringIndex].base + b.ringOffset : NULL;
   size_t off = RingAlloc(sRings[ri], b.size);
   if (off == (size_t)-1) { b.ringValid = false; return false; }
   b.ranges.clear(); b.lastEnd = 0;
   if (b.shadow.size() == b.size) memcpy(sRings[ri].base + off, &b.shadow[0], b.size);
-  else if (b.ringValid) memcpy(sRings[ri].base + off, sRings[b.ringIndex].base + b.ringOffset, b.size); // direct buffer: carry the old contents
-  b.ringValid = true; b.ringIndex = ri; b.ringOffset = off;
+  else if (old) memmove(sRings[ri].base + off, old, b.size); // direct buffer: carry the old contents
+  b.ringValid = true; b.ringIndex = ri; b.ringOffset = off; b.ringLap = sRings[ri].lap;
+  SRingBack k = { BoundBufferId(target), off, sRings[ri].lap };
+  sRings[ri].backs.push_back(k);
   sRingPushes++; sRingBytes += b.size;
   return true;
 }
 
-// Dynamic buffers are written straight into a fresh ring region: no CPU copy at all. The engine
-// re-fills such buffers whole (light-pass streams, sprites), so nothing is lost by not seeding them.
+// Stream buffers are written straight into a fresh ring region: no CPU copy at all. The engine
+// re-fills such buffers whole, so nothing is lost by not seeding them.
 static void* RingMapDirect(SESBuffer& b, GLenum target)
 {
-  if (b.usage != ES_DYNAMIC_DRAW && b.usage != ES_STREAM_DRAW) return NULL;
+  if (!RingWholeUsage(b)) return NULL;
   int ri = (target == ES_ELEMENT_ARRAY_BUFFER) ? 1 : 0;
   size_t off = RingAlloc(sRings[ri], b.size);
   if (off == (size_t)-1) return NULL;
-  b.ringValid = true; b.ringIndex = ri; b.ringOffset = off; b.direct = true;
+  b.ringValid = true; b.ringIndex = ri; b.ringOffset = off; b.ringLap = sRings[ri].lap; b.direct = true;
   b.ranges.clear(); b.lastEnd = 0;
+  SRingBack k = { BoundBufferId(target), off, sRings[ri].lap };
+  sRings[ri].backs.push_back(k);
   sRingPushes++; sRingDirect++; sRingBytes += b.size;
   return sRings[ri].base + off;
 }
@@ -573,8 +622,8 @@ static void __stdcall gles_glBufferDataARB(GLenum target, GLsizeiptrARB size, co
 static void __stdcall gles_glBufferSubDataARB(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const GLvoid* data)
 {
   SESBuffer& b = BoundBuffer(target);
-  // Mode 4: sub-updates of dynamic buffers (the engine's appended index stream) become ring slices.
-  if (MapMode() == 4 && data && size > 0 && b.shadow.empty() && !b.ringValid && (b.usage == ES_DYNAMIC_DRAW || b.usage == ES_STREAM_DRAW) && offset >= 0 && (size_t)(offset + size) <= b.size)
+  // Mode 4: sub-updates of stream buffers (the engine's appended index stream) become ring slices.
+  if (MapMode() == 4 && data && size > 0 && b.shadow.empty() && !b.ringValid && RingUsage(b) && offset >= 0 && (size_t)(offset + size) <= b.size)
   {
     void* p = RingSlice(b, target, (size_t)offset, (size_t)size);
     if (p) { memcpy(p, data, (size_t)size); return; }

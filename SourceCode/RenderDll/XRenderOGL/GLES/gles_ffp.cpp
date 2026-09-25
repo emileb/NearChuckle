@@ -48,6 +48,10 @@ struct SPipeProgram
 };
 
 static std::map<SPipeKey, SPipeProgram> sPrograms;
+// Last program found: consecutive draws mostly repeat the key, which saves the map's memcmp walk.
+static std::map<SPipeKey, SPipeProgram>::iterator sLastProg;
+static bool sLastProgValid;
+
 static std::map<std::string, GLuint> sShaders;   // compiled shader per source text
 static GLuint sCurrentProg;
 GLuint GLES_CurrentProgram() { return sCurrentProg; }
@@ -64,6 +68,7 @@ void GLES_ForgetARBProgram(GLuint id)
       if (it->second.prog) es_glDeleteProgram(it->second.prog);
       if (sCurrentProg == it->second.prog) { sCurrentProg = 0; sCurrentKey = NULL; }
       sPrograms.erase(it++);
+      sLastProgValid = false;
     }
     else ++it;
   }
@@ -400,9 +405,7 @@ static STextureObj* TextureForARBUnit(int unit, int target)
     case ARB_TEX_CUBE: id = u.boundCube; break;
     case ARB_TEX_3D: id = u.bound3D; break;
   }
-  if (!id) return NULL;
-  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
-  return it == g_esTextures.end() ? NULL : &it->second;
+  return GLES_FindTexture(id);
 }
 
 static void BuildKey(SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
@@ -481,8 +484,10 @@ bool GLES_PrepareDraw()
   const SARBProgram* fp = GLES_ARB_Bound(false);
   SPipeKey k;
   BuildKey(k, vp, fp);
-  std::map<SPipeKey, SPipeProgram>::iterator it = sPrograms.find(k);
-  if (it == sPrograms.end())
+  std::map<SPipeKey, SPipeProgram>::iterator it;
+  if (sLastProgValid && memcmp(&k, &sLastProg->first, sizeof(k)) == 0)
+    it = sLastProg;
+  else if ((it = sPrograms.find(k)) == sPrograms.end())
   {
     it = sPrograms.insert(std::make_pair(k, Build(k, vp, fp))).first;
     // The fixed-function features in play, to see which paths a scene exercises.
@@ -490,6 +495,7 @@ bool GLES_PrepareDraw()
     for (int i = 0; i < GLES_MAX_UNITS; i++) if (k.ffp.texGenMode[i]) texGen |= 1u << i;
     GLES_Log("GLES: program #%d built (vp %u, fp %u) texgen 0x%x lights 0x%x clip 0x%x fog %d alpha %d", (int)sPrograms.size(), k.vp, k.fp, texGen, k.ffp.lightMask, k.ffp.clipMask, k.ffp.fogMode, k.ffp.alphaTest);
   }
+  sLastProg = it; sLastProgValid = true;
   SPipeProgram& p = it->second;
   if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; sProgramSwitches++; }
   sCurrentKey = &it->first;

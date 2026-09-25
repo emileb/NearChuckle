@@ -546,7 +546,9 @@ void GLES_InitState()
   memset(&g_es, 0, sizeof(g_es));
   g_es.stencilFace = GL_FRONT;
   g_esTextures.clear();
+  GLES_ForgetTextureCache();
   g_esBuffers.clear();
+  GLES_ForgetBufferCache();
   g_es.matrixMode = GL_MODELVIEW;
   MatIdentity(g_es.modelview.m[0]);
   MatIdentity(g_es.projection.m[0]);

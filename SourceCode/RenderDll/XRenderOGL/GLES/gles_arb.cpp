@@ -8,10 +8,19 @@ static GLuint sNextId = 1;
 static float sEnv[2][96][4];   // [vertex ? 0 : 1]
 static unsigned sEnvVersion[2] = { 1, 1 };
 
+// Two recent lookups: every draw asks for the bound vertex and fragment program.
+static GLuint sFindId[2];
+static SARBProgram* sFindPtr[2];
+static int sFindNext;
+
 static SARBProgram* Find(GLuint id)
 {
+  if (id && id == sFindId[0]) return sFindPtr[0];
+  if (id && id == sFindId[1]) return sFindPtr[1];
   std::map<GLuint, SARBProgram>::iterator it = sPrograms.find(id);
-  return it == sPrograms.end() ? NULL : &it->second;
+  if (it == sPrograms.end()) return NULL;
+  sFindId[sFindNext] = id; sFindPtr[sFindNext] = &it->second; sFindNext ^= 1;
+  return &it->second;
 }
 
 static void __stdcall gles_glGenProgramsARB(GLsizei n, GLuint* ids)
@@ -37,6 +46,7 @@ static void __stdcall gles_glDeleteProgramsARB(GLsizei n, const GLuint* ids)
     void GLES_ForgetARBProgram(GLuint);
     GLES_ForgetARBProgram(ids[i]);
     sPrograms.erase(ids[i]);
+    sFindId[0] = sFindId[1] = 0;
     if (g_es.boundVP == ids[i]) g_es.boundVP = 0;
     if (g_es.boundFP == ids[i]) g_es.boundFP = 0;
   }

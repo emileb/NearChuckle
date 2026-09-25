@@ -57,6 +57,21 @@ void GLES_ReissueTextureUnit0()
 }
 int GLES_NativeActiveUnit() { return sNativeActiveUnit; }
 
+// Direct-mapped cache in front of g_esTextures: every draw looks up each enabled unit's texture.
+static struct { GLuint id; STextureObj* obj; } sTexCache[256];
+void GLES_ForgetTextureCache() { memset(sTexCache, 0, sizeof(sTexCache)); }
+
+STextureObj* GLES_FindTexture(GLuint id)
+{
+  if (!id) return NULL;
+  unsigned slot = id & 255;
+  if (sTexCache[slot].id == id) return sTexCache[slot].obj;
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
+  if (it == g_esTextures.end()) return NULL;
+  sTexCache[slot].id = id; sTexCache[slot].obj = &it->second;
+  return &it->second;
+}
+
 static STextureObj& Obj(GLuint id, GLenum target)
 {
   STextureObj& o = g_esTextures[id];
@@ -126,9 +141,7 @@ STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget)
   else if (u.enableRect && u.boundRect) { id = u.boundRect; samplerTarget = ES_TEXTURE_RECTANGLE_NV; }
   else if (u.enable2D && u.bound2D) { id = u.bound2D; samplerTarget = GL_TEXTURE_2D; }
   else if (u.enable1D && u.bound1D) { id = u.bound1D; samplerTarget = GL_TEXTURE_1D; }
-  if (!id) return NULL;
-  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(id);
-  return it == g_esTextures.end() ? NULL : &it->second;
+  return GLES_FindTexture(id);
 }
 
 static void __stdcall gles_glBindTexture(GLenum target, GLuint id)
@@ -145,6 +158,7 @@ static void __stdcall gles_glDeleteTextures(GLsizei n, const GLuint* ids)
   for (GLsizei i = 0; i < n; i++)
   {
     g_esTextures.erase(ids[i]);
+    if (sTexCache[ids[i] & 255].id == ids[i]) sTexCache[ids[i] & 255].id = 0;
     for (int un = 0; un < GLES_MAX_UNITS; un++)
     {
       STexUnitState& u = g_es.unit[un];

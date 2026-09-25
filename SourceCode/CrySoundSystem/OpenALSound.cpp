@@ -874,6 +874,13 @@ DLL_API signed char     F_API CS_Stream_Stop(CS_STREAM* stream)
 	strm = (ALStream_t*)stream;
 	strm->channel = CS_FREE;
 	alSourceStop(strm->source);
+	// A stopped file stream plays from the start next time.
+	if (strm->callback == &StreamOGGCallback)
+	{
+		AL_OGG_Userdata_t* ogg = (AL_OGG_Userdata_t*)(intptr_t)strm->userdata;
+		ogg->ended = false;
+		stb_vorbis_seek_start(ogg->ogg);
+	}
 	alGetSourcei(strm->source, AL_BUFFERS_QUEUED, &num_buffers);
 
 	for (i = 0; i < num_buffers; i++)
@@ -1023,6 +1030,9 @@ static void UpdateStream(ALStream_t* stream)
 	// frame longer than a chunk, and a starved source stops and was never restarted.
 	bool bOgg = stream->callback == &StreamOGGCallback;
 	AL_OGG_Userdata_t* ogg = bOgg ? (AL_OGG_Userdata_t*)(intptr_t)stream->userdata : NULL;
+	// A stopped source reports every queued buffer as processed: refilling an idle file stream decoded two chunks a frame.
+	if (bOgg && stream->channel == CS_FREE && state == AL_STOPPED)
+		return;
 	// Vorbis is decoded on the game thread, so keep file streams' lead short (~0.5 s) and their fills gentle.
 	int target = bOgg ? 6 : MIN_QUEUED_BUFFERS;
 	for (int fills = 0; num_queued_buffers < target && fills < (bOgg ? 2 : 4); fills++)
@@ -1050,7 +1060,8 @@ static void UpdateStream(ALStream_t* stream)
 	}
 
 	// Callback streams (music, video) start themselves; file streams only once CS_Stream_Play did.
-	if (state != AL_PLAYING && num_queued_buffers > 0 && (!bOgg || stream->channel != CS_FREE))
+	// Restart a starved source only; a paused one stays paused (menu pause, PlayEx's paused start).
+	if ((state == AL_STOPPED || state == AL_INITIAL) && num_queued_buffers > 0 && (!bOgg || stream->channel != CS_FREE))
 	{
 		alSourcePlay(stream->source);
 	}

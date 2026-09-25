@@ -328,15 +328,19 @@ struct SESBuffer
   bool rangeMapped;                  // mode 4: the outstanding map is a GLES_MapBufferRange slice
   int ringIndex;                     // which ring (0 array, 1 element)
   size_t ringOffset;
+  unsigned ringLap;         // ring lap of ringOffset, to tell a current backing from a stale queue entry
   // Mode 4 slices: [start, end) of this buffer written since its last wrap, and where each lives in the ring.
   struct SRange { size_t start, end, ringOff; };
   std::vector<SRange> ranges;
   size_t lastEnd;
-  SESBuffer() : size(0), usage(0), mapped(0), ringValid(false), direct(false), rangeMapped(false), ringIndex(0), ringOffset(0), lastEnd(0) {}
+  SESBuffer() : size(0), usage(0), mapped(0), ringValid(false), direct(false), rangeMapped(false), ringIndex(0), ringOffset(0), ringLap(0), lastEnd(0) {}
 };
 extern std::map<GLuint, SESBuffer> g_esBuffers;   // VBO id -> size, usage, CPU copy
 
 void GLES_InitState();
+void GLES_ForgetBufferCache();
+void GLES_ForgetTextureCache();
+struct STextureObj* GLES_FindTexture(GLuint id);
 void GLES_RegisterState(std::map<std::string, void*>& t);
 void GLES_RegisterTexture(std::map<std::string, void*>& t);
 void GLES_RegisterVertex(std::map<std::string, void*>& t);
