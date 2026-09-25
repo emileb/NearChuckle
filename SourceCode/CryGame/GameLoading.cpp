@@ -155,7 +155,7 @@ void LoadProperties(IScriptObject *table, CStream &stm, IScriptSystem *ss, const
 	for(;;)
 	{
 		char what;
-		stm.Read(what);
+		if(!stm.Read(what)) { TRACE("WARNING: properties table (%s) truncated", parent); return; }
 		if(what==TABLE_END) return;     
 
 		char iskey;
@@ -1714,8 +1714,9 @@ void CXGame::SaveConfiguration( const char *pszSystemCfg,const char *pszGameCfg,
 }
 
 //////////////////////////////////////////////////////////////////////////
-void CXGame::LoadConfiguration(const string &sSystemCfg,const string &sGameCfg)
+void CXGame::LoadConfiguration(const string &sSystemCfgIn,const string &sGameCfgIn)
 {			
+	string sSystemCfg = sSystemCfgIn, sGameCfg = sGameCfgIn;
 	m_pSystem->LoadConfiguration(sSystemCfg);
 
 	FILE *pFile=fxopen(sGameCfg.c_str(), "rb");

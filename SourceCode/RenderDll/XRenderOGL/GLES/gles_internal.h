@@ -16,6 +16,7 @@
 #define ES_STREAM_DRAW                  0x88E0
 #define ES_STATIC_DRAW                  0x88E4
 #define ES_DYNAMIC_DRAW                 0x88E8
+#define ES_MAP_READ_BIT                 0x0001
 #define ES_MAP_WRITE_BIT                0x0002
 #define ES_MAP_INVALIDATE_BUFFER_BIT    0x0008
 #define ES_FRAGMENT_SHADER              0x8B30
@@ -93,6 +94,8 @@
 #define ES_PROCS \
   ES_PROC(const GLubyte*, glGetString, (GLenum)) \
   ES_PROC(void, glGetIntegerv, (GLenum, GLint*)) \
+  ES_PROC(void, glGetBufferParameteriv, (GLenum, GLenum, GLint*)) \
+  ES_PROC(void, glGetVertexAttribiv, (GLuint, GLenum, GLint*)) \
   ES_PROC(void, glGetFloatv, (GLenum, GLfloat*)) \
   ES_PROC(GLenum, glGetError, ()) \
   ES_PROC(void, glEnable, (GLenum)) \
@@ -170,6 +173,7 @@
   ES_PROC(void, glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
   ES_PROC(void, glGetBooleanv, (GLenum, GLboolean*)) \
   ES_PROC(void, glViewport, (GLint, GLint, GLsizei, GLsizei)) \
+  ES_PROC(void, glScissor, (GLint, GLint, GLsizei, GLsizei)) \
   ES_PROC(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean)) \
   ES_PROC(void, glStencilFunc, (GLenum, GLint, GLuint)) \
   ES_PROC(void, glStencilOp, (GLenum, GLenum, GLenum)) \
@@ -251,6 +255,7 @@ struct STextureObj
 };
 
 int GLES_CompressDXT(GLenum format, int w, int h, const GLubyte* rgba, std::vector<GLubyte>& out);
+void GLES_DecompressDXT(GLenum format, int w, int h, const GLubyte* blocks, std::vector<GLubyte>& rgba);
 
 #define GLES_MAX_LIGHTS 4
 
@@ -312,7 +317,24 @@ struct SGLESState
 // Plain data only in SGLESState (it is memset on init); objects live beside it.
 extern SGLESState g_es;
 extern std::map<GLuint, STextureObj> g_esTextures;
-extern std::map<GLuint, GLuint> g_esBuffers;   // VBO id -> size in bytes
+struct SESBuffer
+{
+  GLuint size;
+  GLenum usage;
+  GLenum mapped;                     // target while a CPU-copy map is outstanding
+  std::vector<unsigned char> shadow; // CPU copy, only for buffers the engine maps
+  bool ringValid;                    // mode 4: the current contents live in the persistent ring
+  bool direct;                       // mode 4: the engine writes straight into the ring (dynamic buffers)
+  bool rangeMapped;                  // mode 4: the outstanding map is a GLES_MapBufferRange slice
+  int ringIndex;                     // which ring (0 array, 1 element)
+  size_t ringOffset;
+  // Mode 4 slices: [start, end) of this buffer written since its last wrap, and where each lives in the ring.
+  struct SRange { size_t start, end, ringOff; };
+  std::vector<SRange> ranges;
+  size_t lastEnd;
+  SESBuffer() : size(0), usage(0), mapped(0), ringValid(false), direct(false), rangeMapped(false), ringIndex(0), ringOffset(0), lastEnd(0) {}
+};
+extern std::map<GLuint, SESBuffer> g_esBuffers;   // VBO id -> size, usage, CPU copy
 
 void GLES_InitState();
 void GLES_RegisterState(std::map<std::string, void*>& t);
@@ -336,6 +358,10 @@ int GLES_NativeActiveUnit();
 GLuint GLES_CurrentProgram();
 // Disable/re-enable the enabled attribute arrays around a draw of the layer's own (shadow untouched).
 void GLES_SuspendAttribArrays(bool suspend);
+// Re-issue shadowed state after something outside the layer drew (the Android touch overlay).
+void GLES_ReissueAttribArrays();
+void GLES_ReissueTextureUnit0();
+void GLES_ReissueProgram();
 
 // Scene framebuffer (gles_fbo.cpp)
 bool GLES_SceneFBOEnsure(int w, int h);

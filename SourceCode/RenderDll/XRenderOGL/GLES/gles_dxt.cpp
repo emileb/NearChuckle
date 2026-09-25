@@ -137,3 +137,72 @@ int GLES_CompressDXT(GLenum format, int w, int h, const GLubyte* rgba, std::vect
     }
   return (int)out.size();
 }
+
+//////////////////////////////////////////////////////////////////////////
+// Decoder: DXT1 / DXT3 / DXT5 blocks -> RGBA8, for drivers without S3TC (Adreno 6xx and older).
+//////////////////////////////////////////////////////////////////////////
+
+static void DecodeColorBlock(const GLubyte* in, bool dxt1, GLubyte px[16][4])
+{
+  unsigned short c0 = in[0] | (in[1] << 8), c1 = in[2] | (in[3] << 8);
+  int pal[4][4];
+  Unpack565(c0, pal[0]); Unpack565(c1, pal[1]);
+  pal[0][3] = pal[1][3] = 255;
+  if (!dxt1 || c0 > c1)
+  {
+    for (int c = 0; c < 3; c++) { pal[2][c] = (2 * pal[0][c] + pal[1][c]) / 3; pal[3][c] = (pal[0][c] + 2 * pal[1][c]) / 3; }
+    pal[2][3] = pal[3][3] = 255;
+  }
+  else
+  {
+    for (int c = 0; c < 3; c++) { pal[2][c] = (pal[0][c] + pal[1][c]) / 2; pal[3][c] = 0; }
+    pal[2][3] = 255; pal[3][3] = 0;
+  }
+  unsigned idx = in[4] | (in[5] << 8) | (in[6] << 16) | ((unsigned)in[7] << 24);
+  for (int i = 0; i < 16; i++, idx >>= 2)
+    for (int c = 0; c < 4; c++) px[i][c] = (GLubyte)pal[idx & 3][c];
+}
+
+static void DecodeAlphaBlockDXT3(const GLubyte* in, GLubyte px[16][4])
+{
+  for (int i = 0; i < 16; i++)
+  {
+    int a = (in[i / 2] >> ((i & 1) * 4)) & 15;
+    px[i][3] = (GLubyte)(a * 17);
+  }
+}
+
+static void DecodeAlphaBlockDXT5(const GLubyte* in, GLubyte px[16][4])
+{
+  int a[8];
+  a[0] = in[0]; a[1] = in[1];
+  if (a[0] > a[1])
+    for (int i = 1; i < 7; i++) a[i + 1] = ((7 - i) * a[0] + i * a[1]) / 7;
+  else
+  {
+    for (int i = 1; i < 5; i++) a[i + 1] = ((5 - i) * a[0] + i * a[1]) / 5;
+    a[6] = 0; a[7] = 255;
+  }
+  unsigned long long bits = 0;
+  for (int i = 0; i < 6; i++) bits |= (unsigned long long)in[2 + i] << (8 * i);
+  for (int i = 0; i < 16; i++, bits >>= 3) px[i][3] = (GLubyte)a[bits & 7];
+}
+
+void GLES_DecompressDXT(GLenum format, int w, int h, const GLubyte* blocks, std::vector<GLubyte>& rgba)
+{
+  bool dxt1 = (format == ES_COMPRESSED_RGB_S3TC_DXT1 || format == ES_COMPRESSED_RGBA_S3TC_DXT1);
+  int bs = dxt1 ? 8 : 16;
+  rgba.assign((size_t)w * h * 4, 0);
+  const GLubyte* in = blocks;
+  for (int by = 0; by < h; by += 4)
+    for (int bx = 0; bx < w; bx += 4, in += bs)
+    {
+      GLubyte px[16][4];
+      DecodeColorBlock(in + (dxt1 ? 0 : 8), dxt1, px);
+      if (format == ES_COMPRESSED_RGBA_S3TC_DXT3) DecodeAlphaBlockDXT3(in, px);
+      else if (format == ES_COMPRESSED_RGBA_S3TC_DXT5) DecodeAlphaBlockDXT5(in, px);
+      for (int y = 0; y < 4 && by + y < h; y++)
+        for (int x = 0; x < 4 && bx + x < w; x++)
+          memcpy(&rgba[((by + y) * w + bx + x) * 4], px[y * 4 + x], 4);
+    }
+}

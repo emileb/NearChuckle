@@ -51,6 +51,32 @@ static std::map<SPipeKey, SPipeProgram> sPrograms;
 static std::map<std::string, GLuint> sShaders;   // compiled shader per source text
 static GLuint sCurrentProg;
 GLuint GLES_CurrentProgram() { return sCurrentProg; }
+static const SPipeKey* sCurrentKey;
+
+// An ARB program id that is re-specified or deleted invalidates every linked pipeline built with it;
+// the renderer reuses ids (shader variants, reloads), so a stale link draws with the wrong shader.
+void GLES_ForgetARBProgram(GLuint id)
+{
+  for (std::map<SPipeKey, SPipeProgram>::iterator it = sPrograms.begin(); it != sPrograms.end();)
+  {
+    if (it->first.vp == id || it->first.fp == id)
+    {
+      if (it->second.prog) es_glDeleteProgram(it->second.prog);
+      if (sCurrentProg == it->second.prog) { sCurrentProg = 0; sCurrentKey = NULL; }
+      sPrograms.erase(it++);
+    }
+    else ++it;
+  }
+}
+
+// For the draw dump: the key of the program in use.
+const char* GLES_CurrentProgramDesc()
+{
+  static char buf[64];
+  if (!sCurrentKey) return "none";
+  sprintf(buf, "vp %u fp %u alpha %d", sCurrentKey->vp, sCurrentKey->fp, sCurrentKey->ffp.alphaTest);
+  return buf;
+}
 
 static const char* UnitSampler(int type)
 {
@@ -435,6 +461,8 @@ static void BuildKey(SPipeKey& k, const SARBProgram* vp, const SARBProgram* fp)
 }
 
 static int sProgramSwitches;
+
+void GLES_ReissueProgram() { es_glUseProgram(sCurrentProg); }
 void GLES_ReportTiming()
 {
   if (!g_esDebug) return;
@@ -464,6 +492,7 @@ bool GLES_PrepareDraw()
   }
   SPipeProgram& p = it->second;
   if (sCurrentProg != p.prog) { es_glUseProgram(p.prog); sCurrentProg = p.prog; sProgramSwitches++; }
+  sCurrentKey = &it->first;
 
   if (!vp)
   {

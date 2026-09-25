@@ -51,14 +51,15 @@ void CStatObj::CompactPosBuffer(Vec3d * _vbuff, int * _vcount, list2<int> * pind
 
   for(uint v=0; v<(uint)(*_vcount); v++)
   {
-    list2<int> * pHash = &pos_hash_table[(unsigned char)(_vbuff[v].x*100)];//[(unsigned char)(_vbuff[v].y*100)];
+    // Through int first: float -> unsigned char is undefined out of range and arm64 clang drops the truncation.
+    list2<int> * pHash = &pos_hash_table[(unsigned char)(int)(_vbuff[v].x*100)];//[(unsigned char)(_vbuff[v].y*100)];
     int find = FindInPosBuffer( _vbuff[v], tmp_buff, tmp_count, pHash);
     if(find<0)
     {
       tmp_buff[tmp_count] = _vbuff[v];
       pindices->Add(tmp_count);
 
-      pos_hash_table[(unsigned char)(_vbuff[v].x*100)]/*[(unsigned char)(_vbuff[v].y*100)]*/.Add(tmp_count);
+      pos_hash_table[(unsigned char)(int)(_vbuff[v].x*100)]/*[(unsigned char)(_vbuff[v].y*100)]*/.Add(tmp_count);
 
       tmp_count++;
     }

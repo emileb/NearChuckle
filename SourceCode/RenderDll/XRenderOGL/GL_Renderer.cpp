@@ -1172,7 +1172,7 @@ void CGLRenderer::Update()
 	// FARCRY_SCREENSHOT_FILE; FARCRY_SCREENSHOT_EVERY=<n> dumps every nth frame to <prefix>_<frame>.jpg.
 	{
 		static int nShotFrame = getenv("FARCRY_SCREENSHOT_FRAME") ? atoi(getenv("FARCRY_SCREENSHOT_FRAME")) : -1;
-		static int nEvery = getenv("FARCRY_SCREENSHOT_EVERY") ? atoi(getenv("FARCRY_SCREENSHOT_EVERY")) : 0;
+		int nEvery = getenv("FARCRY_SCREENSHOT_EVERY") ? atoi(getenv("FARCRY_SCREENSHOT_EVERY")) : 0; // per frame: the dev hook toggles it
 		static int nFrame = 0;
 		++nFrame;
 		if (nFrame == nShotFrame)
@@ -1189,7 +1189,11 @@ void CGLRenderer::Update()
 		{
 			static float fLast = 0;
 			float fNow = iTimer->GetAsyncCurTime();
-			if (fLast > 0) fprintf(stderr, "FPS: frame %d, %.1f fps over last %d frames\n", nFrame, nFpsEvery / (fNow - fLast), nFpsEvery);
+			if (fLast > 0)
+			{
+				fprintf(stderr, "FPS: frame %d, %.1f fps over last %d frames\n", nFrame, nFpsEvery / (fNow - fLast), nFpsEvery);
+				iLog->Log("FPS: frame %d, %.1f fps over last %d frames (min frame %.1f ms)", nFrame, nFpsEvery / (fNow - fLast), nFpsEvery, 1000.0f * (fNow - fLast) / nFpsEvery); // log.txt too
+			}
 			fLast = fNow;
 			// FARCRY_DEPTH_PROBE=1: depth at a few pixels, to compare the GLES readback against GL.
 			if (getenv("FARCRY_DEPTH_PROBE"))
@@ -2559,11 +2563,12 @@ void CGLRenderer::ScreenShot(const char *filename)
   if (!filename)
   {           
     strcpy(scname,"FarCry00.jpg");
+    char *szDigits = scname + strlen(scname) - 6;
       
     for (i=0 ; i<=99 ; i++) 
     { 
-      scname[6] = i/10 + '0'; 
-      scname[7] = i%10 + '0'; 
+      szDigits[0] = i/10 + '0'; 
+      szDigits[1] = i%10 + '0'; 
       //if (!CXFile::FileExist(scname)) 
 			fp=fxopen(scname,"rb");
 			if (!fp)

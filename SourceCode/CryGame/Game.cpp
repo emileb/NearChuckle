@@ -779,6 +779,132 @@ bool CXGame::IsInPause(IProcess *pProcess)
 	return (bPause);
 }
 
+#ifdef LINUX
+#include <SDL3/SDL.h>
+#include <deque>
+#include <unistd.h>
+#endif
+
+
+#ifdef LINUX
+
+// Development aid: FARCRY_DEVCMD=<file> drives the UI unattended. The file is read and deleted
+// whenever it appears, one line per frame: "mouse x y" (800x600 virtual screen), "click [x y]",
+// "key <SDL key name>", "wait n". Presses are held a frame, as CryInput samples once per frame.
+static void DevCmdUpdate(ISystem* pSystem, const char* szFile, CXGame* pGame)
+{
+	static std::deque<string> cmds;
+	static int nHold = 0;
+	if (FILE* f = fopen(szFile, "r"))
+	{
+		char line[256];
+		int nRead = 0;
+		while (fgets(line, sizeof(line), f))
+		{
+			size_t n = strlen(line);
+			while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+				line[--n] = 0;
+			if (n)
+				cmds.push_back(line), nRead++;
+		}
+		fclose(f);
+		// An empty file is one the writer has created but not filled yet.
+		if (nRead)
+			unlink(szFile);
+	}
+	if (nHold > 0)
+	{
+		nHold--;
+		return;
+	}
+	if (cmds.empty())
+		return;
+	string cmd = cmds.front();
+	cmds.pop_front();
+	IMouse* pMouse = pSystem->GetIInput() ? pSystem->GetIInput()->GetIMouse() : NULL;
+	char arg[64] = { 0 };
+	float x = 0, y = 0;
+	SDL_Event ev;
+	memset(&ev, 0, sizeof(ev));
+	if (sscanf(cmd.c_str(), "mouse %f %f", &x, &y) == 2 && pMouse)
+	{
+		pMouse->SetVScreenX(x);
+		pMouse->SetVScreenY(y);
+	}
+	else if (strncmp(cmd.c_str(), "click", 5) == 0)
+	{
+		if (sscanf(cmd.c_str(), "click %f %f", &x, &y) == 2 && pMouse)
+		{
+			pMouse->SetVScreenX(x);
+			pMouse->SetVScreenY(y);
+		}
+		ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+		ev.button.button = SDL_BUTTON_LEFT;
+		ev.button.down = true;
+		SDL_PushEvent(&ev);
+		cmds.push_front("_release");
+		nHold = 1;
+	}
+	else if (cmd == "_release")
+	{
+		ev.type = SDL_EVENT_MOUSE_BUTTON_UP;
+		ev.button.button = SDL_BUTTON_LEFT;
+		SDL_PushEvent(&ev);
+	}
+	else if (sscanf(cmd.c_str(), "key %63s", arg) == 1)
+	{
+		ev.type = SDL_EVENT_KEY_DOWN;
+		ev.key.key = SDL_GetKeyFromName(arg);
+		ev.key.down = true;
+		SDL_PushEvent(&ev);
+		cmds.push_front(string("_keyup ") + arg);
+		nHold = 1;
+	}
+	else if (sscanf(cmd.c_str(), "_keyup %63s", arg) == 1)
+	{
+		ev.type = SDL_EVENT_KEY_UP;
+		ev.key.key = SDL_GetKeyFromName(arg);
+		SDL_PushEvent(&ev);
+	}
+	else if (sscanf(cmd.c_str(), "wait %f", &x) == 1)
+		nHold = (int)x;
+	else if (sscanf(cmd.c_str(), "hold %f", &x) == 1)
+	{
+		// Hold the left mouse button (fire in game) for n frames, without any touch traffic.
+		ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+		ev.button.button = SDL_BUTTON_LEFT;
+		ev.button.down = true;
+		SDL_PushEvent(&ev);
+		cmds.push_front("_release");
+		nHold = (int)x;
+	}
+	else if (sscanf(cmd.c_str(), "turn %f %f", &x, &y) == 2)
+	{
+		// Relative mouse motion in pixels (0.2 degrees each), the path the real mouse and the touch look use.
+		ev.type = SDL_EVENT_MOUSE_MOTION;
+		ev.motion.xrel = x;
+		ev.motion.yrel = y;
+		SDL_PushEvent(&ev);
+	}
+	else if (sscanf(cmd.c_str(), "look %f %f", &x, &y) == 2)
+	{
+		// Point the player's view (pitch, yaw), e.g. at the ground for decal tests.
+		if (pGame->GetMyPlayer()) pGame->GetMyPlayer()->SetAngles(Vec3(x, 0, y));
+	}
+	else if (strncmp(cmd.c_str(), "cmd ", 4) == 0)
+		pSystem->GetIConsole()->ExecuteString(cmd.c_str() + 4, false, true); // "#lua" and cheats regardless of devmode
+	else if (sscanf(cmd.c_str(), "env %63s %n", arg, &nHold) == 1)
+	{
+		// Set (or clear) one of the FARCRY_* development variables; the renderer re-reads FARCRY_SCREENSHOT_EVERY each frame.
+		const char* val = cmd.c_str() + nHold;
+		nHold = 0;
+		*val ? setenv(arg, val, 1) : unsetenv(arg);
+	}
+	pSystem->GetILog()->Log("DEVCMD: %s", cmd.c_str());
+	printf("DEVCMD: %s -> mouse %.0f %.0f\n", cmd.c_str(), pMouse ? pMouse->GetVScreenX() : -1.0f, pMouse ? pMouse->GetVScreenY() : -1.0f);
+}
+#endif
+
 //////////////////////////////////////////////////////////////////////
 //! update all game and children
 bool CXGame::Update()
@@ -790,13 +916,17 @@ bool CXGame::Update()
 	}
 
 #ifdef LINUX
-	// Development aid: FARCRY_RESUME_FRAME=<n> keeps the in-game menu off from frame n on, for
-	// unattended renderer captures.
+	// Development aid: FARCRY_RESUME_FRAME=<n> drops the in-game menu once, at frame n, for
+	// unattended renderer captures; the menu can be reopened afterwards.
 	{
 		static int nResumeFrame = getenv("FARCRY_RESUME_FRAME") ? atoi(getenv("FARCRY_RESUME_FRAME")) : -1;
 		static int nFrame = 0;
-		if (nResumeFrame > 0 && ++nFrame >= nResumeFrame && m_bMenuOverlay && !m_bEditor && m_pClient && m_pClient->IsConnected())
+		static bool bResumed = false;
+		if (nResumeFrame > 0 && ++nFrame >= nResumeFrame && !bResumed && m_bMenuOverlay && !m_bEditor && m_pClient && m_pClient->IsConnected())
+		{
 			MenuOff();
+			bResumed = true;
+		}
 		// FARCRY_LOOK="pitch yaw": point the player's view there once gameplay is on screen, for captures.
 		static const char* szLook = getenv("FARCRY_LOOK");
 		if (szLook && nResumeFrame > 0 && nFrame == nResumeFrame + 200 && GetMyPlayer())
@@ -805,10 +935,17 @@ bool CXGame::Update()
 			sscanf(szLook, "%f %f", &fPitch, &fYaw);
 			GetMyPlayer()->SetAngles(Vec3(fPitch, 0, fYaw));
 		}
+		// FARCRY_SKIP_CUTSCENES=1: keep stopping cutscenes once the menu is off (Training opens on one).
+		static bool bSkipCutScenes = getenv("FARCRY_SKIP_CUTSCENES") != NULL;
+		if (bSkipCutScenes && nResumeFrame > 0 && nFrame > nResumeFrame && (nFrame % 30) == 0)
+			m_pSystem->GetIMovieSystem()->StopAllCutScenes();
 		// FARCRY_QUIT_FRAME=<n>: clean shutdown at frame n, so logs and reports are flushed.
 		static int nQuitFrame = getenv("FARCRY_QUIT_FRAME") ? atoi(getenv("FARCRY_QUIT_FRAME")) : -1;
 		if (nQuitFrame > 0 && nFrame >= nQuitFrame && !m_pSystem->IsQuitting())
 			m_pSystem->Quit();
+		static const char* szDevCmd = getenv("FARCRY_DEVCMD");
+		if (szDevCmd)
+			DevCmdUpdate(m_pSystem, szDevCmd, this);
 	}
 #endif
 

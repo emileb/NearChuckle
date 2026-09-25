@@ -65,7 +65,8 @@ void CLeafBuffer::CompactBuffer(struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F * _vbuff
 
   for(unsigned int v=0; v<(unsigned int)(*_vcount); v++)
   {
-    int nHashInd = (unsigned char)(_vbuff[v].xyz.x*100);
+    // Through int first: float -> unsigned char is undefined out of range and arm64 clang drops the truncation.
+    int nHashInd = (unsigned char)(int)(_vbuff[v].xyz.x*100);
     uint nMInfo = uiInfo[v];
     uint nMatId = nMInfo & 255;
 		int find = bShareVerts[nMatId] ? FindInBuffer( _vbuff[v], _tbuff[v], nMInfo, uiInfo, tmp_vbuff, tmp_tbuff, tmp_count, &hash_table[nHashInd], ShareNewInfo/*[(unsigned char)(_vbuff[v].pos.y*100)]*/) : -1;
@@ -76,7 +77,7 @@ void CLeafBuffer::CompactBuffer(struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F * _vbuff
       pindices->AddElem(tmp_count);
       ShareNewInfo.AddElem(uiInfo[v]);
 
-      hash_table[(unsigned char)(_vbuff[v].xyz.x*100)]/*[(unsigned char)(_vbuff[v].pos.y*100)]*/.Add(tmp_count);
+      hash_table[nHashInd]/*[(unsigned char)(_vbuff[v].pos.y*100)]*/.Add(tmp_count);
 
       tmp_count++;
     }

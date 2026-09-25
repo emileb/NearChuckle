@@ -156,9 +156,9 @@ add_library(${PROJECT_NAME} SHARED ${SRC_FILES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/SourceCode/CryCommon
-    ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll
-    ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll/Common/Shaders
+    ${farcry_SOURCE_DIR}/SourceCode/CryCommon
+    ${farcry_SOURCE_DIR}/SourceCode/RenderDll
+    ${farcry_SOURCE_DIR}/SourceCode/RenderDll/Common/Shaders
 )
 
 target_link_directories(${PROJECT_NAME} PRIVATE
@@ -197,9 +197,9 @@ if (NOT MSVC)
     target_compile_definitions(XRenderGLES PRIVATE GLES_RENDERER DISABLE_CG)
     target_include_directories(XRenderGLES PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/SourceCode/CryCommon
-        ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll
-        ${CMAKE_SOURCE_DIR}/SourceCode/RenderDll/Common/Shaders
+        ${farcry_SOURCE_DIR}/SourceCode/CryCommon
+        ${farcry_SOURCE_DIR}/SourceCode/RenderDll
+        ${farcry_SOURCE_DIR}/SourceCode/RenderDll/Common/Shaders
     )
     target_link_libraries(XRenderGLES PRIVATE ${ARCH_LIBS} SDL3)
 endif()

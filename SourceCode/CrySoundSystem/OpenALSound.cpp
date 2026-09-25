@@ -7,6 +7,7 @@
 #include <AL/al.h>
 #include <AL/alc.h>
 #include <cstdio>
+#include <cstdint>
 #include <vector>
 #include "stb_vorbis.c"
 
@@ -34,6 +35,8 @@ typedef struct
 {
 	stb_vorbis* ogg;
 	unsigned char* filebuf;
+	bool loop;
+	bool ended;
 } AL_OGG_Userdata_t;
 
 typedef struct
@@ -48,6 +51,8 @@ typedef struct
 #endif
 	ALuint source;
 	int channel;
+	ALenum format;
+	int rate;
 } ALStream_t;
 
 ALCdevice* aldevice;
@@ -574,8 +579,22 @@ signed char StreamOGGCallback(CS_STREAM* pStream, void* pBuffer, int nLength, in
 #endif
 {
 	AL_OGG_Userdata_t* userdata = (AL_OGG_Userdata_t*)nParam;
-	int read_samples = stb_vorbis_get_samples_short_interleaved(userdata->ogg,
-		userdata->ogg->channels, (short*)pBuffer, nLength / sizeof(short));
+	int channels = userdata->ogg->channels;
+	int want = nLength / (int)sizeof(short) / channels;
+	int got = 0;
+	while (got < want)
+	{
+		int n = stb_vorbis_get_samples_short_interleaved(userdata->ogg, channels, (short*)pBuffer + got * channels, (want - got) * channels);
+		if (n > 0) { got += n; continue; }
+		if (!userdata->loop) break;
+		stb_vorbis_seek_start(userdata->ogg);
+	}
+	if (got < want)
+	{
+		// Finished: pad with silence once, then UpdateStream stops queueing.
+		memset((short*)pBuffer + got * channels, 0, (want - got) * channels * sizeof(short));
+		userdata->ended = true;
+	}
 	return 0;
 }
 
@@ -627,10 +646,15 @@ DLL_API CS_STREAM*    F_API CS_Stream_Open(const char *name_or_data, unsigned in
 			userdata = new AL_OGG_Userdata_t;
 			userdata->ogg = ogg;
 			userdata->filebuf = buf;
+			userdata->loop = (mode & CS_LOOP_NORMAL) != 0;
+			userdata->ended = false;
 
 			alGenSources(1, &stream->source);
-			stream->buffer = new char[4096];
-			stream->len = 4096;
+			// ~93 ms of stereo per chunk: one chunk a frame has to outrun the mixer even on slow frames.
+			stream->buffer = new char[16384];
+			stream->len = 16384;
+			stream->format = (info.channels == 1) ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+			stream->rate = info.sample_rate;
 			stream->callback = StreamOGGCallback;
 #ifdef LINUX64
 			stream->userdata = userdata;
@@ -707,6 +731,9 @@ DLL_API CS_STREAM* F_API CS_Stream_Create(CS_STREAMCALLBACK callback, int length
 	stream->callback = callback;
 	stream->userdata = userdata;
 	stream->channel = CS_FREE;
+	stream->format = (mode & CS_MONO) ? ((mode & CS_8BITS) ? AL_FORMAT_MONO8 : AL_FORMAT_MONO16)
+	                                  : ((mode & CS_8BITS) ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16);
+	stream->rate = samplerate > 0 ? samplerate : 44100;
 
 	memset(stream->buffer, 0, length);
 
@@ -751,6 +778,19 @@ DLL_API signed char     F_API CS_Stream_Close(CS_STREAM* stream)
 	return 1;
 }
 
+// A file stream replayed after it finished starts over.
+static void RewindOGG(ALStream_t* strm)
+{
+	if (strm->callback != &StreamOGGCallback)
+		return;
+	AL_OGG_Userdata_t* ogg = (AL_OGG_Userdata_t*)(intptr_t)strm->userdata;
+	if (ogg->ended)
+	{
+		ogg->ended = false;
+		stb_vorbis_seek_start(ogg->ogg);
+	}
+}
+
 DLL_API int             F_API CS_Stream_Play(int channel, CS_STREAM* stream)
 {
 	ALStream_t* strm = (ALStream_t*)stream;
@@ -760,6 +800,7 @@ DLL_API int             F_API CS_Stream_Play(int channel, CS_STREAM* stream)
 		__builtin_trap();
 		return -1;
 	}
+	RewindOGG(strm);
 
 	alSourcei(strm->source, AL_SOURCE_RELATIVE, AL_TRUE);
 	alSource3f(strm->source, AL_POSITION, 0.0f, 0.0f, 0.0f);
@@ -788,6 +829,7 @@ DLL_API int             F_API CS_Stream_PlayEx(int channel, CS_STREAM* stream, C
 		__builtin_trap();
 		return -1;
 	}
+	RewindOGG(strm);
 
 	alSourcei(strm->source, AL_SOURCE_RELATIVE, AL_TRUE);
 	alSource3f(strm->source, AL_POSITION, 0.0f, 0.0f, 0.0f);
@@ -797,8 +839,7 @@ DLL_API int             F_API CS_Stream_PlayEx(int channel, CS_STREAM* stream, C
 				strm->len, strm->userdata);
 
 	alGenBuffers(1, &stream_buf);
-	alBufferData(stream_buf, AL_FORMAT_STEREO16,
-		(ALvoid *)strm->buffer, strm->len, 44100);
+	alBufferData(stream_buf, strm->format, (ALvoid *)strm->buffer, strm->len, strm->rate);
 	alSourceQueueBuffers(strm->source, 1, &stream_buf);
 
 	alSourcePlay(strm->source);
@@ -975,36 +1016,43 @@ static void UpdateStream(ALStream_t* stream)
 
 	alGetSourcei(stream->source, AL_BUFFERS_QUEUED, &num_queued_buffers);
 
-	if (num_queued_buffers < MIN_QUEUED_BUFFERS)
+	if (!stream->callback)
+		return;
+
+	// Top the queue up with a few chunks per call: one chunk a frame starved the source on any
+	// frame longer than a chunk, and a starved source stops and was never restarted.
+	bool bOgg = stream->callback == &StreamOGGCallback;
+	AL_OGG_Userdata_t* ogg = bOgg ? (AL_OGG_Userdata_t*)(intptr_t)stream->userdata : NULL;
+	// Vorbis is decoded on the game thread, so keep file streams' lead short (~0.5 s) and their fills gentle.
+	int target = bOgg ? 6 : MIN_QUEUED_BUFFERS;
+	for (int fills = 0; num_queued_buffers < target && fills < (bOgg ? 2 : 4); fills++)
 	{
-		if (stream->callback)
+		if (ogg && ogg->ended)
+			break;
+		stream->callback((CS_STREAM*)stream, stream->buffer,
+			stream->len, stream->userdata);
+
+		if (stream->len == 138240)
 		{
-			stream->callback((CS_STREAM*)stream, stream->buffer,
-				stream->len, stream->userdata);
-
-			if (stream->len == 138240)
-			{
-				bytes_processed = BytesFromBinkDec(stream->buffer, stream->len);
-			}
-			else
-			{
-				bytes_processed = stream->len;
-			}
-
-			if (bytes_processed > 0)
-			{
-				alGenBuffers(1, &stream_buf);
-				alBufferData(stream_buf, AL_FORMAT_STEREO16,
-					(ALvoid *)stream->buffer, bytes_processed, 44100);
-				alSourceQueueBuffers(stream->source, 1, &stream_buf);
-				alGetSourcei(stream->source, AL_BUFFERS_QUEUED, &num_queued_buffers);
-			}
-
-			if (state != AL_PLAYING && stream->callback != &StreamOGGCallback)
-			{
-				alSourcePlay(stream->source);
-			}
+			bytes_processed = BytesFromBinkDec(stream->buffer, stream->len);
 		}
+		else
+		{
+			bytes_processed = stream->len;
+		}
+
+		if (bytes_processed <= 0)
+			break;
+		alGenBuffers(1, &stream_buf);
+		alBufferData(stream_buf, stream->format, (ALvoid *)stream->buffer, bytes_processed, stream->rate);
+		alSourceQueueBuffers(stream->source, 1, &stream_buf);
+		num_queued_buffers++;
+	}
+
+	// Callback streams (music, video) start themselves; file streams only once CS_Stream_Play did.
+	if (state != AL_PLAYING && num_queued_buffers > 0 && (!bOgg || stream->channel != CS_FREE))
+	{
+		alSourcePlay(stream->source);
 	}
 }
 

@@ -533,16 +533,23 @@ struct STranslator
       s += "  v_color = vec4(1.0); v_color2 = vec4(0.0, 0.0, 0.0, 1.0);\n";
       for (int i = 0; i < GLES_MAX_UNITS; i++) { sprintf(buf, "  v_tex%d = vec4(0.0, 0.0, 0.0, 1.0);\n", i); s += buf; }
       s += out;
+      // ARB clamps colour results to [0,1] on write; a light-attenuation term written unclamped
+      // (Far Cry's tracer: c.x - dist*c.y with c = 1e8, 1e-8) otherwise saturates the whole primitive.
+      s += "  v_color = clamp(v_color, 0.0, 1.0); v_color2 = clamp(v_color2, 0.0, 1.0);\n";
       s += "  v_fogc = v_fogc4.x;\n";
     }
     else
     {
       s += "  vec4 oColor = vec4(0.0); vec4 oDepth = vec4(0.0);\n";
       s += out;
+      s += "  oColor = clamp(oColor, 0.0, 1.0);\n"; // result.color is clamped before fog, as in ARB
       if (p->fogMode == 1) s += "  float fogf = clamp((u_fogParams.y - v_fogc) * u_fogParams.z, 0.0, 1.0);\n";
       else if (p->fogMode == 2) s += "  float fogf = clamp(exp(-u_fogParams.w * v_fogc), 0.0, 1.0);\n";
       else if (p->fogMode == 3) s += "  float fogf = clamp(exp(-u_fogParams.w * u_fogParams.w * v_fogc * v_fogc), 0.0, 1.0);\n";
       if (p->fogMode) s += "  oColor.rgb = mix(u_fogColor.rgb, oColor.rgb, fogf);\n";
+      // FARCRY_GLES_UVDEBUG=1: every ARB fragment program shows its texcoord 0 instead (red = u, green = v).
+      static bool uvDebug = getenv("FARCRY_GLES_UVDEBUG") != NULL;
+      if (uvDebug) s += "  oColor = vec4((isnan(v_tex0.x) || isnan(v_tex0.y) || isinf(v_tex0.x) || isinf(v_tex0.y)) ? 1.0 : 0.0, fract(v_tex0.x), fract(v_tex0.y), 1.0);\n";
       s += "  fragColor = oColor;\n";
       if (writesDepth) s += "  gl_FragDepth = oDepth.z;\n";
     }

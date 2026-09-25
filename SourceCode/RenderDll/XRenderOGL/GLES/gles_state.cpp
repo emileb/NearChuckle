@@ -6,7 +6,7 @@
 
 SGLESState g_es;
 std::map<GLuint, STextureObj> g_esTextures;
-std::map<GLuint, GLuint> g_esBuffers;
+std::map<GLuint, SESBuffer> g_esBuffers;
 
 //////////////////////////////////////////////////////////////////////////
 // Matrices (column-major, GL layout)

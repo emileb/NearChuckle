@@ -34,6 +34,8 @@ static void __stdcall gles_glDeleteProgramsARB(GLsizei n, const GLuint* ids)
     SARBProgram* p = Find(ids[i]);
     if (!p) continue;
     if (p->shader) es_glDeleteShader(p->shader);
+    void GLES_ForgetARBProgram(GLuint);
+    GLES_ForgetARBProgram(ids[i]);
     sPrograms.erase(ids[i]);
     if (g_es.boundVP == ids[i]) g_es.boundVP = 0;
     if (g_es.boundFP == ids[i]) g_es.boundFP = 0;
@@ -61,6 +63,9 @@ static void __stdcall gles_glProgramStringARB(GLenum target, GLenum format, GLsi
   p->vertex = (target == ES_VERTEX_PROGRAM_ARB);
   p->source.assign((const char*)string, len);
   if (p->shader) { es_glDeleteShader(p->shader); p->shader = 0; }
+  { void GLES_ForgetARBProgram(GLuint); GLES_ForgetARBProgram(id); }
+  static int specs = 0;
+  if (g_esDebug) GLES_Log("GLES: ARB %s program %u specified (spec #%d)", target == ES_VERTEX_PROGRAM_ARB ? "vertex" : "fragment", id, ++specs);
   std::string err;
   p->valid = GLES_ARB_Translate(*p, err);
   if (!p->valid)
@@ -68,8 +73,19 @@ static void __stdcall gles_glProgramStringARB(GLenum target, GLenum format, GLsi
   else
   {
     static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
-    if (debug) GLES_Log("GLES: ARB %s program %u translated:\n%s", p->vertex ? "vertex" : "fragment", id, p->glsl.c_str());
+    if (debug) GLES_Log("GLES: ARB %s program %u source:\n%s\ntranslated:\n%s", p->vertex ? "vertex" : "fragment", id, p->source.c_str(), p->glsl.c_str());
   }
+}
+
+// For the draw dump: the first few environment constants of each program target.
+const char* GLES_ARB_EnvDesc()
+{
+  static char buf[1024];
+  int n = 0;
+  for (int t = 0; t < 2; t++)
+    for (int i = 0; i < (t ? 3 : 10) && n < (int)sizeof(buf) - 80; i++)
+      n += sprintf(buf + n, " %s%d=%.3g,%.3g,%.3g,%.3g", t ? "f" : "v", i, sEnv[t][i][0], sEnv[t][i][1], sEnv[t][i][2], sEnv[t][i][3]);
+  return buf;
 }
 
 static void SetEnv(GLenum target, GLuint index, const float* v)

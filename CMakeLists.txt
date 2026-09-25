@@ -49,6 +49,8 @@ else()
         # The tree takes the address of temporaries passed straight to callees; GCC allows it under -fpermissive.
         add_compile_options(-Wno-address-of-temporary)
     endif()
+    # The tree assumes x86's signed char (e.g. the save game's (char)-1 table terminator); arm defaults to unsigned.
+    add_compile_options(-fsigned-char)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -D_DEBUG -g")
 endif()

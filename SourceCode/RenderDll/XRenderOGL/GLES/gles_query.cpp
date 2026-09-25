@@ -3,24 +3,49 @@
   through a scratch framebuffer for glGetTexImage.
 =============================================================================*/
 #include "gles_internal.h"
+#include <map>
+#if defined(__APPLE__)
+#include <execinfo.h>
+#endif
 
 // ES only answers "any samples passed"; the renderer expects a pixel count. It uses the
 // count as a visibility test, so report a nominal count when anything passed.
 #define GLES_VISIBLE_SAMPLES 64
 
 static void __stdcall gles_glGenOcclusionQueriesNV(GLsizei n, GLuint* ids) { es_glGenQueries(n, ids); }
-static void __stdcall gles_glDeleteOcclusionQueriesNV(GLsizei n, const GLuint* ids) { es_glDeleteQueries(n, ids); }
+static void __stdcall gles_glDeleteOcclusionQueriesNV(GLsizei n, const GLuint* ids);
 static void __stdcall gles_glBeginOcclusionQueryNV(GLuint id) { es_glBeginQuery(ES_ANY_SAMPLES_PASSED, id); }
 static void __stdcall gles_glEndOcclusionQueryNV() { es_glEndQuery(ES_ANY_SAMPLES_PASSED); }
 
+// The renderer reads last frame's corona query with a blocking GL_PIXEL_COUNT_NV ("Stupidly block until
+// we have a query result"), which drains the GPU pipeline whenever the GPU is the bottleneck. A result
+// that is not ready yet answers with the query's previous result instead (visible until known):
+// a corona's visibility then lags a frame, which its fade hides. FARCRY_GLES_QUERYWAIT=1 restores blocking.
+static std::map<GLuint, GLuint> sQueryLast;
 static void __stdcall gles_glGetOcclusionQueryuivNV(GLuint id, GLenum pname, GLuint* params)
 {
   SESTimer timer(GLES_T_QUERY);
   GLuint v = 0;
-  if (pname == 0x8867 /* GL_PIXEL_COUNT_AVAILABLE_NV */) { es_glGetQueryObjectuiv(id, ES_QUERY_RESULT_AVAILABLE, &v); params[0] = v; }
-  else { es_glGetQueryObjectuiv(id, ES_QUERY_RESULT, &v); params[0] = v ? GLES_VISIBLE_SAMPLES : 0; }
+  if (pname == 0x8867 /* GL_PIXEL_COUNT_AVAILABLE_NV */) { es_glGetQueryObjectuiv(id, ES_QUERY_RESULT_AVAILABLE, &v); params[0] = v; return; }
+  static bool wait = getenv("FARCRY_GLES_QUERYWAIT") != NULL;
+  GLuint avail = 1;
+  if (!wait) es_glGetQueryObjectuiv(id, ES_QUERY_RESULT_AVAILABLE, &avail);
+  if (!avail)
+  {
+    std::map<GLuint, GLuint>::iterator it = sQueryLast.find(id);
+    params[0] = it != sQueryLast.end() ? it->second : GLES_VISIBLE_SAMPLES;
+    return;
+  }
+  es_glGetQueryObjectuiv(id, ES_QUERY_RESULT, &v);
+  params[0] = sQueryLast[id] = v ? GLES_VISIBLE_SAMPLES : 0;
 }
 static void __stdcall gles_glGetOcclusionQueryivNV(GLuint id, GLenum pname, GLint* params) { gles_glGetOcclusionQueryuivNV(id, pname, (GLuint*)params); }
+
+static void __stdcall gles_glDeleteOcclusionQueriesNV(GLsizei n, const GLuint* ids)
+{
+  for (GLsizei i = 0; i < n; i++) sQueryLast.erase(ids[i]);
+  es_glDeleteQueries(n, ids);
+}
 
 // glGetTexImage: read the level back through a framebuffer. RGBA/UNSIGNED_BYTE only; other
 // formats are converted from that.
@@ -101,6 +126,20 @@ static void __stdcall gles_glGetTexImage(GLenum target, GLint level, GLenum form
 // ES 3.0 reads RGBA/UNSIGNED_BYTE from the colour buffer; convert the other formats from that.
 static void __stdcall gles_glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, GLvoid* pixels)
 {
+  if (g_esDebug)
+  {
+    static int n;
+    if (n++ < 60)
+    {
+#if defined(__APPLE__)
+      void* fr[8]; int k = backtrace(fr, 8); char** sy = backtrace_symbols(fr, k);
+      GLES_Log("GLES: glReadPixels #%d %d,%d %dx%d format 0x%x type 0x%x from %s", n, x, y, w, h, format, type, k > 1 ? sy[1] : "?");
+      free(sy);
+#else
+      GLES_Log("GLES: glReadPixels #%d %d,%d %dx%d format 0x%x type 0x%x from %p", n, x, y, w, h, format, type, __builtin_return_address(0));
+#endif
+    }
+  }
   SESTimer timer(GLES_T_READPIX);
   if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) { es_glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels); return; }
   if (format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX)

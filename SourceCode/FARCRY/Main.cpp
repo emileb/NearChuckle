@@ -24,6 +24,7 @@
 #include <process.h>
 #else
 #include <unistd.h>
+#include <locale.h>
 #include "CryLibrary.h"
 #endif
 

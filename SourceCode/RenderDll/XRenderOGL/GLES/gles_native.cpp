@@ -35,7 +35,7 @@ bool GLES_HasNativeExt(const char* name)
 
 void GLES_Log(const char* fmt, ...)
 {
-  char buf[1024];
+  static char buf[16384]; // shader sources are logged whole under FARCRY_GLES_DEBUG
   va_list args;
   va_start(args, fmt);
   vsnprintf(buf, sizeof(buf), fmt, args);

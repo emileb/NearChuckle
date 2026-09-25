@@ -57,6 +57,12 @@ bool GLES_SceneFBOEnsure(int w, int h)
 
 void GLES_SwapWindow(SDL_Window* win)
 {
+  extern bool g_esDumpDraw;
+  g_esDumpDraw = getenv("FARCRY_GLES_DUMPDRAW") && atoi(getenv("FARCRY_GLES_DUMPDRAW"));
+  void GLES_WatchTexture(const char* what, GLuint id);
+  GLES_WatchTexture("frame", 0);
+  void GLES_RingEndFrame();
+  GLES_RingEndFrame();
   int pw = 0, ph = 0;
   SDL_GetWindowSizeInPixels(win, &pw, &ph);
   if (sSceneFBO)

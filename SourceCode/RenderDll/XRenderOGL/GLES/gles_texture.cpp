@@ -2,6 +2,9 @@
   gles_texture.cpp : texture objects, format conversion, parameters.
 =============================================================================*/
 #include "gles_internal.h"
+#if defined(__APPLE__)
+#include <execinfo.h>
+#endif
 
 static GLenum NativeTarget(GLenum target)
 {
@@ -44,6 +47,14 @@ void GLES_NativeBindTexture(int unit, GLenum target, GLuint id)
 
 // The renderer's own glActiveTextureARB is forwarded natively; keep the shadow in step.
 void GLES_NoteActiveUnit(int unit) { sNativeActiveUnit = unit; }
+
+// The overlay binds its own 2D texture on unit 0 and leaves unit 0 active.
+void GLES_ReissueTextureUnit0()
+{
+  es_glActiveTexture(ES_TEXTURE0);
+  es_glBindTexture(GL_TEXTURE_2D, sNativeBound[0][0]);
+  es_glActiveTexture(ES_TEXTURE0 + sNativeActiveUnit);
+}
 int GLES_NativeActiveUnit() { return sNativeActiveUnit; }
 
 static STextureObj& Obj(GLuint id, GLenum target)
@@ -58,6 +69,28 @@ static STextureObj& Obj(GLuint id, GLenum target)
   return o;
 }
 
+static void CheckNativeTarget(const char* what, const STextureObj* o);
+
+// FARCRY_GLES_WATCHTEX=<id>: log whenever the middle texel of that texture's level 0 changes, naming the
+// call that changed it. A debugging aid for "this texture holds the wrong image".
+void GLES_WatchTexture(const char* what, GLuint id)
+{
+  static GLuint watched = getenv("FARCRY_GLES_WATCHTEX") ? (GLuint)atoi(getenv("FARCRY_GLES_WATCHTEX")) : 0;
+  static int last = -1;
+  if (!watched) return;
+  std::map<GLuint, STextureObj>::iterator it = g_esTextures.find(watched);
+  if (it == g_esTextures.end() || it->second.target != GL_TEXTURE_2D || !it->second.width) return;
+  GLint drawFbo = 0, readFbo = 0;
+  es_glGetIntegerv(0x8CA6, &drawFbo); es_glGetIntegerv(0x8CAA, &readFbo);
+  GLuint fbo = 0; es_glGenFramebuffers(1, &fbo); es_glBindFramebuffer(ES_READ_FRAMEBUFFER, fbo);
+  es_glFramebufferTexture2D(ES_READ_FRAMEBUFFER, ES_COLOR_ATTACHMENT0, GL_TEXTURE_2D, watched, 0);
+  GLubyte t[4] = { 0, 0, 0, 0 };
+  int lum = -2;
+  if (es_glCheckFramebufferStatus(ES_READ_FRAMEBUFFER) == 0x8CD5) { es_glReadPixels(it->second.width / 2, it->second.height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, t); lum = (t[0] + t[1] + t[2]) / 3; }
+  es_glBindFramebuffer(ES_READ_FRAMEBUFFER, (GLuint)readFbo); es_glBindFramebuffer(0x8CA9, (GLuint)drawFbo); es_glDeleteFramebuffers(1, &fbo);
+  if (lum != last) { GLES_Log("GLES: WATCH tex %u mid texel %d -> %d after %s (tex %u, unit %d)", watched, last, lum, what, id, g_es.activeUnit); last = lum; }
+}
+
 // The texture the renderer means by (active unit, target), bound natively so the following call hits it.
 static STextureObj* BindForEdit(GLenum target)
 {
@@ -66,7 +99,22 @@ static STextureObj* BindForEdit(GLenum target)
   if (!id) return NULL;
   STextureObj& o = Obj(id, target);
   GLES_NativeBindTexture(g_es.activeUnit, o.target, id);
+  // The draw-time sampler binds leave the native active unit wherever they finished; an upload or
+  // parameter call must go to the renderer's unit even when the binding itself is already in place.
+  if (sNativeActiveUnit != g_es.activeUnit) { es_glActiveTexture(ES_TEXTURE0 + g_es.activeUnit); sNativeActiveUnit = g_es.activeUnit; }
+  CheckNativeTarget("edit", &o);
+  GLES_WatchTexture("previous edit", id);
   return &o;
+}
+
+// Debug: the texture the native GL will actually write, compared with the one the layer means.
+static void CheckNativeTarget(const char* what, const STextureObj* o)
+{
+  if (!g_esDebug || !o || o->target != GL_TEXTURE_2D) return;
+  GLint au = 0, b = 0;
+  es_glGetIntegerv(0x84E0 /* GL_ACTIVE_TEXTURE */, &au);
+  es_glGetIntegerv(0x8069 /* GL_TEXTURE_BINDING_2D */, &b);
+  if ((GLuint)b != o->id) GLES_Log("GLES: MISMATCH %s meant tex %u on unit %d but native unit %d has %d bound (shadow native unit %d)", what, o->id, g_es.activeUnit, au - 0x84C0, b, sNativeActiveUnit);
 }
 
 STextureObj* GLES_BoundTexture(int unit, GLenum& samplerTarget)
@@ -93,6 +141,7 @@ static void __stdcall gles_glBindTexture(GLenum target, GLuint id)
 
 static void __stdcall gles_glDeleteTextures(GLsizei n, const GLuint* ids)
 {
+  if (g_esDebug) for (GLsizei i = 0; i < n; i++) GLES_Log("GLES: glDeleteTextures %u", ids[i]);
   for (GLsizei i = 0; i < n; i++)
   {
     g_esTextures.erase(ids[i]);
@@ -294,6 +343,27 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
   // The renderer asks the driver to compress: do it here, so the streamer can read the blocks back.
   static bool noCompress = getenv("FARCRY_GLES_NOCOMPRESS") != NULL;
   static bool debug = getenv("FARCRY_GLES_DEBUG") != NULL;
+  if (debug && !pixels) GLES_Log("GLES: glTexImage2D tex %u level %d %dx%d internal 0x%x format 0x%x (no data)", o->id, level, w, h, internalFormat, format);
+#if defined(__APPLE__)
+  {
+    // Mac only: who uploads the watched texture (FARCRY_GLES_WATCHTEX).
+    static GLuint watched = getenv("FARCRY_GLES_WATCHTEX") ? (GLuint)atoi(getenv("FARCRY_GLES_WATCHTEX")) : 0;
+    if (watched && o->id == watched && level == 0)
+    {
+      void* frames[24]; int n = backtrace(frames, 24); char** syms = backtrace_symbols(frames, n);
+      for (int i = 0; i < n; i++) GLES_Log("GLES:   upload from %s", syms[i]);
+      free(syms);
+    }
+  }
+#endif
+  if (debug && pixels && !IsS3TC(internalFormat))
+  {
+    // Content check for uncompressed uploads: mean of the first row.
+    int sc = SrcChannels(format), sum[4] = { 0, 0, 0, 0 };
+    if (sc && type == GL_UNSIGNED_BYTE) for (int x = 0; x < w; x++) for (int c = 0; c < sc; c++) sum[c] += ((const GLubyte*)pixels)[x * sc + c];
+    GLES_Log("GLES: glTexImage2D tex %u level %d %dx%d internal 0x%x format 0x%x type 0x%x row0 mean %d %d %d %d", o->id, level, w, h, internalFormat, format, type,
+      w && sc ? sum[0] / w : -1, w && sc > 1 ? sum[1] / w : -1, w && sc > 2 ? sum[2] / w : -1, w && sc > 3 ? sum[3] / w : -1);
+  }
   if (IsS3TC(internalFormat) && pixels && type == GL_UNSIGNED_BYTE && SrcChannels(format) > 0 && !noCompress)
   {
     if (debug) GLES_Log("GLES: glTexImage2D tex %u level %d %dx%d compress 0x%x from format 0x%x", o->id, level, w, h, internalFormat, format);
@@ -381,6 +451,7 @@ static void __stdcall gles_glTexImage2D(GLenum target, GLint level, GLint intern
 
 static void __stdcall gles_glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, const GLvoid* pixels)
 {
+  if (g_esDebug) { GLenum t = 0; STextureObj* o = GLES_BoundTexture(g_es.activeUnit, t); GLES_Log("GLES: glTexSubImage2D tex %u level %d %d,%d %dx%d format 0x%x type 0x%x", o ? o->id : 0, level, x, y, w, h, format, type); }
   SESTimer timer(GLES_T_TEXSUB);
   STextureObj* o = BindForEdit(target);
   if (!o || type != GL_UNSIGNED_BYTE) return;
@@ -397,12 +468,26 @@ static void __stdcall gles_glTexSubImage2D(GLenum target, GLint level, GLint x, 
 
 static void __stdcall gles_glCompressedTexImage2DARB(GLenum target, GLint level, GLenum internalFormat, GLsizei w, GLsizei h, GLint border, GLsizei size, const GLvoid* data)
 {
+  if (g_esDebug) { GLenum t = 0; STextureObj* o = GLES_BoundTexture(g_es.activeUnit, t); GLES_Log("GLES: glCompressedTexImage2D tex %u level %d %dx%d format 0x%x size %d", o ? o->id : 0, level, w, h, internalFormat, size); }
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
   if (data) o->compressed[CompKey(target, level)].assign((const GLubyte*)data, (const GLubyte*)data + size);
-  es_glCompressedTexImage2D(nativeTarget, level, internalFormat, w, h, 0, size, data);
-  CompleteCubeLevel(*o, target, level, w, h, internalFormat, 0, size);
+  if (IsS3TC(internalFormat) && !NativeS3TC())
+  {
+    // No S3TC on this driver (Adreno 6xx): decode the streamed-in DXT to RGBA8. The blocks stay kept above for readback.
+    std::vector<GLubyte> rgba;
+    if (data) GLES_DecompressDXT(internalFormat, w, h, (const GLubyte*)data, rgba);
+    es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
+    es_glTexImage2D(nativeTarget, level, ES_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data ? &rgba[0] : NULL);
+    es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+    CompleteCubeLevel(*o, target, level, w, h, ES_RGBA8, GL_RGBA, 0);
+  }
+  else
+  {
+    es_glCompressedTexImage2D(nativeTarget, level, internalFormat, w, h, 0, size, data);
+    CompleteCubeLevel(*o, target, level, w, h, internalFormat, 0, size);
+  }
   if (level == 0 && o->generateMipmap) GLES_Log("GLES: mipmap generation requested for compressed texture %u; not possible on ES", o->id);
   if (level == 0) { o->width = w; o->height = h; o->internalFormat = internalFormat; }
   if (level >= o->levels) o->levels = level + 1;
@@ -424,11 +509,21 @@ static void __stdcall gles_glCompressedTexSubImage2DARB(GLenum target, GLint lev
   STextureObj* o = BindForEdit(target);
   if (!o) return;
   GLenum nativeTarget = (target >= 0x8515 && target <= 0x851A) ? target : o->target;
+  if (IsS3TC(format) && !NativeS3TC())
+  {
+    std::vector<GLubyte> rgba;
+    GLES_DecompressDXT(format, w, h, (const GLubyte*)data, rgba);
+    es_glPixelStorei(ES_UNPACK_ALIGNMENT, 1);
+    es_glTexSubImage2D(nativeTarget, level, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, &rgba[0]);
+    es_glPixelStorei(ES_UNPACK_ALIGNMENT, g_es.unpackAlignment);
+    return;
+  }
   es_glCompressedTexSubImage2D(nativeTarget, level, x, y, w, h, format, size, data);
 }
 
 static void __stdcall gles_glCopyTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h)
 {
+  if (g_esDebug) { GLenum t = 0; STextureObj* o = GLES_BoundTexture(g_es.activeUnit, t); GLES_Log("GLES: glCopyTexSubImage2D tex %u level %d %dx%d", o ? o->id : 0, level, w, h); }
   SESTimer timer(GLES_T_COPYTEX);
   STextureObj* o = BindForEdit(target);
   if (!o) return;
@@ -444,6 +539,7 @@ static void __stdcall gles_glCopyTexSubImage2D(GLenum target, GLint level, GLint
 
 static void __stdcall gles_glCopyTexImage2D(GLenum target, GLint level, GLenum internalFormat, GLint x, GLint y, GLsizei w, GLsizei h, GLint)
 {
+  if (g_esDebug) { GLenum t = 0; STextureObj* o = GLES_BoundTexture(g_es.activeUnit, t); GLES_Log("GLES: glCopyTexImage2D tex %u level %d %dx%d format 0x%x", o ? o->id : 0, level, w, h, internalFormat); }
   SESTimer timer(GLES_T_COPYTEX);
   STextureObj* o = BindForEdit(target);
   if (!o) return;

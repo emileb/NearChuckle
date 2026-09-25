@@ -259,7 +259,9 @@ const char *CSystem::GetUserName()
 #ifndef LINUX
 	::GetUserName(szNameBuffer, &dwSize);
 #else
-	strncpy(szNameBuffer, getenv("USER"), dwSize);
+	// USER is unset on Android
+	const char *pUser = getenv("USER");
+	strncpy(szNameBuffer, pUser ? pUser : "user", dwSize - 1);
 #endif
 	return szNameBuffer;
 }

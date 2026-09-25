@@ -263,6 +263,10 @@ struct SGLTexUnit
 };
 
 //////////////////////////////////////////////////////////////////////
+#ifdef GLES_RENDERER
+void* GLES_MapBufferRange(unsigned int target, size_t offset, size_t size); // GLES/gles_vertex.cpp
+#endif
+
 class CGLRenderer : public CRenderer
 {
   friend class CGLTexMan;
@@ -1144,6 +1148,22 @@ public:
     if (SUPPORTS_GL_ARB_vertex_buffer_object)
     {
       glBindBufferARB(GL_ARRAY_BUFFER_ARB, m_RP.m_VidBufs[nCurVB].m_pVBDyn->m_VS[0].m_VertBuf.m_nID);
+#ifdef GLES_RENDERER
+      // Map only the slice about to be written: mapping the whole shared buffer per light pass cost
+      // a driver allocation (or a ring wait) per pass on Adreno. VB_Unlock's unmap is then a no-op.
+      {
+        int nOffsR = m_RP.m_VidBufs[nCurVB].m_nOffs;
+        if (nSize + nOffsR > m_RP.m_VidBufs[nCurVB].m_nCount)
+          nOffsR = 0;
+        byte *pSlice = (byte *)GLES_MapBufferRange(GL_ARRAY_BUFFER_ARB, nOffsR, nSize);
+        if (pSlice)
+        {
+          nOffs = nOffsR;
+          m_RP.m_VidBufs[nCurVB].m_nOffs = nOffsR + nSize;
+          return pSlice;
+        }
+      }
+#endif
       pData = (byte *)glMapBufferARB(GL_ARRAY_BUFFER_ARB, GL_WRITE_ONLY_ARB);
       if (nSize+m_RP.m_VidBufs[nCurVB].m_nOffs > m_RP.m_VidBufs[nCurVB].m_nCount)
         m_RP.m_VidBufs[nCurVB].m_nOffs = 0;
