@@ -1651,6 +1651,13 @@ void CPlayer::ProcessAngles(CXEntityProcessingCmd &ProcessingCmd)
 
 //#define UNDERWATER_SPEED	0.19f/8.0f
 
+#ifdef __ANDROID__
+// Touch sticks always scale speed by deflection; joypad mode would also put mouse look through a stick dead zone.
+static bool AnalogMove(CXGame*) { return true; }
+#else
+static bool AnalogMove(CXGame* pGame) { return pGame->cl_use_joypad->GetIVal() != 0; }
+#endif
+
 ///////////////////////////////////////////////
 /*! Updates the position and stats of the player
 		@param ProcessingCmd structure of commands to process
@@ -2012,7 +2019,7 @@ void CPlayer::ProcessMovements(CXEntityProcessingCmd &cmd, bool bScheduled)
 	{				          
 		bMoveF=true;
 		float fFwd=1.0f;
-		if (m_pGame->cl_use_joypad->GetIVal())
+		if (AnalogMove(m_pGame))
 			fFwd=cmd.GetMoveFwd();
 
 		if(m_stats.onLadder)	// when on ladder - move mostly UP/DOWN
@@ -2055,7 +2062,7 @@ void CPlayer::ProcessMovements(CXEntityProcessingCmd &cmd, bool bScheduled)
 
 		bMoveB=true;
 		float fBack=1.0f;
-		if (m_pGame->cl_use_joypad->GetIVal())			
+		if (AnalogMove(m_pGame))
 			fBack=cmd.GetMoveBack();
 
 		//FIXME: would be nice if backward key detach us from the ladder when we approach the ground (instead use the jump button), but for this
@@ -2101,7 +2108,7 @@ void CPlayer::ProcessMovements(CXEntityProcessingCmd &cmd, bool bScheduled)
 	{								
 		bMoveL=true;
 		float fLR=1.0f;
-		if (m_pGame->cl_use_joypad->GetIVal())
+		if (AnalogMove(m_pGame))
 			fLR=cmd.GetMoveLeft();		
 
 		/*if (m_stats.onLadder)
@@ -2121,7 +2128,7 @@ void CPlayer::ProcessMovements(CXEntityProcessingCmd &cmd, bool bScheduled)
 	{			
 		bMoveR=true;
 		float fLR=1.0f;
-		if (m_pGame->cl_use_joypad->GetIVal())
+		if (AnalogMove(m_pGame))
 			fLR=cmd.GetMoveRight();		
 
 
@@ -2226,7 +2233,7 @@ void CPlayer::ProcessMovements(CXEntityProcessingCmd &cmd, bool bScheduled)
 		}
 
 		// Resolve analog movement magnitudes
-		if (m_pGame->cl_use_joypad->GetIVal())
+		if (AnalogMove(m_pGame))
 		{		
 			float fMoveMag=0;
 			{
