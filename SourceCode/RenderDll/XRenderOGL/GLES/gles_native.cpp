@@ -53,7 +53,11 @@ void GLES_Log(const char* fmt, ...)
   va_start(args, fmt);
   vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
-  // stderr as well: the engine log is buffered and lost if the process is killed.
+  // stderr as well: the engine log is buffered and lost if the process is killed. On Android the
+  // engine log already reaches logcat, so stderr only covers the time before it exists.
+#ifdef __ANDROID__
+  if (!iLog)
+#endif
   fprintf(stderr, "%s\n", buf);
   if (iLog) iLog->Log("%s\n", buf);
 }
