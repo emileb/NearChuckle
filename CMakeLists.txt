@@ -5,7 +5,10 @@ project(farcry LANGUAGES CXX)
 
 if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(ARCH_TYPE "x64")
-else (CMAKE_SIZEOF_VOID_P EQUAL 4)
+elseif (ANDROID)
+    # 32-bit arm: none of the x86 assembly or SSE switches apply.
+    set(ARCH_TYPE "arm")
+else ()
     set(ARCH_TYPE "x86")
 endif()
 message("CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
@@ -31,8 +34,13 @@ if (MSVC)
     add_compile_options(/W3) # Warning level
 else()
     add_definitions(-DLINUX -fpermissive)
-    if (${ARCH_TYPE} STREQUAL "x64")
+    # 32-bit arm takes the 64-bit configuration too: it selects the portable code, the 32-bit side is Windows-era x86.
+    if (${ARCH_TYPE} STREQUAL "x64" OR ${ARCH_TYPE} STREQUAL "arm")
         add_definitions(-DLINUX64 -D_AMD64_)
+    endif()
+    if (${ARCH_TYPE} STREQUAL "arm")
+        # The data loaders read packed file structs in place; keep the compiler from merging those reads into ldrd/ldm.
+        add_compile_options(-mllvm -arm-assume-misaligned-load-store)
     endif()
     if (APPLE)
         add_definitions(-DDARWIN_NO_CARBON)
