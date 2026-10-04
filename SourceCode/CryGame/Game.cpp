@@ -790,7 +790,7 @@ bool CXGame::IsInPause(IProcess *pProcess)
 
 // Development aid: FARCRY_DEVCMD=<file> drives the UI unattended. The file is read and deleted
 // whenever it appears, one line per frame: "mouse x y" (800x600 virtual screen), "click [x y]",
-// "key <SDL key name, _ for spaces> [frames]", "wait n". Presses are held a frame, as CryInput samples once per frame.
+// "key <SDL key name, _ for spaces> [frames]", "keydown/_keyup <name>", "wait n". Presses are held a frame, as CryInput samples once per frame.
 static SDL_Keycode DevKey(const char* szName)
 {
 	string sName(szName);
@@ -857,6 +857,15 @@ static void DevCmdUpdate(ISystem* pSystem, const char* szFile, CXGame* pGame)
 		ev.type = SDL_EVENT_MOUSE_BUTTON_UP;
 		ev.button.button = SDL_BUTTON_LEFT;
 		SDL_PushEvent(&ev);
+	}
+	else if (sscanf(cmd.c_str(), "keydown %63s", arg) == 1)
+	{
+		// Held until "_keyup <name>", so it can be combined with other keys.
+		ev.type = SDL_EVENT_KEY_DOWN;
+		ev.key.key = DevKey(arg);
+		ev.key.down = true;
+		SDL_PushEvent(&ev);
+		nHold = 1;
 	}
 	else if (sscanf(cmd.c_str(), "key %63s", arg) == 1)
 	{
