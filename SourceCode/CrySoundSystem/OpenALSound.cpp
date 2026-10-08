@@ -30,6 +30,9 @@ typedef struct
 	ALuint buf;
 	int flags;
 	char filename[MAX_SOUND_FILENAME];
+	// FMOD's 3D rolloff starts at the sample's min distance; these are FMOD's defaults.
+	float fMinDist = 1.0f;
+	float fMaxDist = 1000000000.0f;
 } ALSample_t;
 
 typedef struct
@@ -1500,6 +1503,8 @@ DLL_API int             F_API CS_PlaySoundEx(int channel, CS_SAMPLE *sptr, CS_DS
 	alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
 	alSource3f(src, AL_VELOCITY, 0.0f, 0.0f, 0.0f);
 	alSourcei(src, AL_LOOPING, samp->flags & CS_LOOP_NORMAL ? AL_TRUE : AL_FALSE);
+	alSourcef(src, AL_REFERENCE_DISTANCE, samp->fMinDist);
+	alSourcef(src, AL_MAX_DISTANCE, samp->fMaxDist);
 	alSourcePlay(src);
 	if (startpaused)
 	{
@@ -1553,7 +1558,11 @@ DLL_API signed char     F_API CS_Sample_SetDefaults(CS_SAMPLE *sptr, int deffreq
 
 DLL_API signed char     F_API CS_Sample_SetMinMaxDistance(CS_SAMPLE *sptr, float min, float max)
 {
-	return 0;
+	// Applied at the next play, as in FMOD; without it OpenAL attenuates from 1 m.
+	ALSample_t* samp = (ALSample_t*)sptr;
+	samp->fMinDist = min;
+	samp->fMaxDist = max;
+	return 1;
 }
 
 DLL_API signed char     F_API CS_Sample_SetMaxPlaybacks(CS_SAMPLE *sptr, int max)
