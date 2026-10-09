@@ -930,7 +930,11 @@ void CXConsole::DrawBuffer(int nScrollPos, const char *szEffect)
 	  m_pFont->SetEffect(szEffect);
 	  m_pFont->SetSameSize(true);
 	  m_pFont->SetCharWidthScale(1.5f / 3.0f);
+#ifdef __ANDROID__
+	  m_pFont->SetSize(vector2f(20, 20)); // readable on a phone
+#else
 	  m_pFont->SetSize(vector2f(14, 14));
+#endif
 	  m_pFont->SetColor(color4f(1,1,1,1));
 
 		m_pFont->UseRealPixels(true);
