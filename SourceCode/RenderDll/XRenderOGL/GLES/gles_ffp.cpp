@@ -157,7 +157,7 @@ static std::string BuildFFPVertex(const SFFPKey& k)
   s += "void main(){\n gl_Position = u_mvp * a_pos;\n";
   s += " vec4 eyePos = u_mv * a_pos;\n vec3 eyeN = normalize(mat3(u_mv) * a_normal.xyz);\n";
   s += " vec3 eyeU = normalize(eyePos.xyz);\n vec3 refl = eyeU - 2.0 * eyeN * dot(eyeN, eyeU);\n";
-  s += " v_fogc = -eyePos.z;\n v_color2 = a_color2;\n";
+  s += " v_fogc = -eyePos.z;\n v_color2 = clamp(a_color2, 0.0, 1.0);\n";
   if (k.lightMask)
   {
     s += k.colorMaterial ? " vec4 matAmb = a_color; vec4 matDiff = a_color;\n" : " vec4 matAmb = u_matAmb; vec4 matDiff = u_matDiff;\n";
@@ -172,10 +172,10 @@ static std::string BuildFFPVertex(const SFFPKey& k)
                    "  lit += att * (u_lightAmb[%d].rgb * matAmb.rgb + ndl * u_lightDiff[%d].rgb * matDiff.rgb + sp * u_lightSpec[%d].rgb * u_matSpec.rgb);\n }\n", i, i, i, i, i, i, i, i, i);
       s += buf;
     }
-    s += " v_color = vec4(clamp(lit, 0.0, 1.0), matDiff.a);\n";
+    s += " v_color = vec4(clamp(lit, 0.0, 1.0), clamp(matDiff.a, 0.0, 1.0));\n";
   }
   else
-    s += " v_color = a_color;\n";
+    s += " v_color = clamp(a_color, 0.0, 1.0);\n"; // GL clamps vertex colours; coronas pass light colours above 1
   for (int i = 0; i < GLES_MAX_UNITS; i++)
   {
     sprintf(buf, " vec4 tc%d = a_tex%d;\n", i, i); s += buf;

@@ -402,6 +402,9 @@ static void __stdcall gles_glClientActiveTextureARB(GLenum tex)
   if (unit >= 0 && unit < GLES_MAX_UNITS) g_es.clientActiveUnit = unit;
 }
 
+// GL clamps colour state to [0,1] when it is specified.
+static void Clamp01(float* d, const float* s, int n) { for (int i = 0; i < n; i++) d[i] = s[i] < 0.0f ? 0.0f : (s[i] > 1.0f ? 1.0f : s[i]); }
+
 static void TexEnvSet(GLenum target, GLenum pname, const float* fparams, GLint iparam)
 {
   if (target == GL_TEXTURE_FILTER_CONTROL_EXT) return; // LOD bias: no ES equivalent
@@ -410,7 +413,7 @@ static void TexEnvSet(GLenum target, GLenum pname, const float* fparams, GLint i
   switch (pname)
   {
     case GL_TEXTURE_ENV_MODE:  e.mode = iparam; break;
-    case GL_TEXTURE_ENV_COLOR: memcpy(e.color, fparams, 16); break;
+    case GL_TEXTURE_ENV_COLOR: Clamp01(e.color, fparams, 4); break;
     case ES_COMBINE_RGB:       e.combineRGB = iparam; break;
     case ES_COMBINE_ALPHA:     e.combineAlpha = iparam; break;
     case ES_RGB_SCALE:         e.scaleRGB = fparams[0]; break;
@@ -466,7 +469,7 @@ static void __stdcall gles_glTexGendv(GLenum coord, GLenum pname, const GLdouble
 // Alpha test, fog, clip planes, and calls without an ES meaning
 //////////////////////////////////////////////////////////////////////////
 
-static void __stdcall gles_glAlphaFunc(GLenum func, GLclampf ref) { g_es.alphaFunc = func; g_es.alphaRef = ref; }
+static void __stdcall gles_glAlphaFunc(GLenum func, GLclampf ref) { g_es.alphaFunc = func; Clamp01(&g_es.alphaRef, &ref, 1); }
 
 static void FogSet(GLenum pname, const float* p)
 {
@@ -476,7 +479,7 @@ static void FogSet(GLenum pname, const float* p)
     case GL_FOG_START:   g_es.fogStart = p[0]; break;
     case GL_FOG_END:     g_es.fogEnd = p[0]; break;
     case GL_FOG_DENSITY: g_es.fogDensity = p[0]; break;
-    case GL_FOG_COLOR:   memcpy(g_es.fogColor, p, 16); break;
+    case GL_FOG_COLOR:   Clamp01(g_es.fogColor, p, 4); break;
   }
 }
 static void __stdcall gles_glFogf(GLenum pname, GLfloat param) { float f[4] = {param,0,0,0}; FogSet(pname, f); }
