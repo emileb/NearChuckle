@@ -1321,6 +1321,12 @@ int CGLRenderer::EnumDisplayFormats(TArray<SDispFormat>& Formats, bool bReset)
   if (bReset)
     return 0;
 
+#ifdef __ANDROID__
+  // The launcher sets the resolution: the menu offers only the current one.
+  AddCurrentDisplayFormat(Formats);
+  return Formats.Num();
+#endif
+
   int i, j;
   for (i=0; i<m_numvidmodes; i++)
   {
