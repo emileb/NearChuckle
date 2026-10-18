@@ -1815,7 +1815,7 @@ char *CShader::mfScriptPreprocessor (char *buf, const char *drn, const char *nam
     FILE *fp = fopen(nn, "w");
     if (fp)
     {
-      fprintf(fp, buf);
+      fputs(buf, fp);
       fclose(fp);
     }
   }

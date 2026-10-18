@@ -152,7 +152,7 @@ char * const * const nvparse_print_errors(FILE * errfp)
     for (char * const *  ep = nvparse_get_errors(); *ep; ep++)
     {
         const char * errstr = *ep;
-        fprintf(errfp, errstr);
+        fputs(errstr, errfp);
     }
     return nvparse_get_errors();
 }

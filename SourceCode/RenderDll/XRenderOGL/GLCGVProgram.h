@@ -327,7 +327,7 @@ public:
     else
       sprintf(name, "%s.cg", m_Name.c_str());
     FILE *fp = fopen(name, "w");
-    fprintf(fp, scr);
+    fputs(scr, fp);
     fclose (fp);
   }
   void mfInit()
