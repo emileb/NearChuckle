@@ -89,6 +89,8 @@
 
 // Texture unit the layer uses for its own work, above the renderer's GLES_MAX_UNITS.
 #define GLES_SCRATCH_UNIT 15
+// Second layer unit: the gamma ramp, sampled beside the scene colour at swap.
+#define GLES_RAMP_UNIT 14
 
 // Native ES entry points used by the layer. Loaded through SDL in GLES_LoadNative().
 #define ES_PROCS \

@@ -55,7 +55,10 @@ void CGLRenderer::CheckGammaSupport(void)
 
 void CGLRenderer::SetDeviceGamma(ushort *r, ushort *g, ushort *b)
 {
-#ifndef LINUX
+#if defined(GLES_RENDERER)
+  if ((GetFeatures() & RFT_HWGAMMA) && !CV_r_nohwgamma)
+    GLES_SetGammaRamp(r, g, b);
+#elif !defined(LINUX)
   ushort gamma[3][256];
   int i;
 

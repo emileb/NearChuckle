@@ -25,4 +25,7 @@ void GLES_SetContextAttributes();
 struct SDL_Window;
 void GLES_SwapWindow(struct SDL_Window* win);
 
+// r_Gamma/r_Brightness/r_Contrast: ES has no hardware ramp, so the swap draws the frame through this one.
+void GLES_SetGammaRamp(const unsigned short* r, const unsigned short* g, const unsigned short* b);
+
 #endif

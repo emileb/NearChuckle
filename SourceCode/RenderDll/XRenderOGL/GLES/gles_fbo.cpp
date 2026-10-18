@@ -3,12 +3,13 @@
 
   ES cannot read depth back from the window, so the renderer draws into a
   layer-owned framebuffer with a depth-stencil texture. The colour is blitted
-  to the window at swap; the depth texture answers glReadPixels(GL_DEPTH_COMPONENT)
-  (flare and sun probes) and glCopyTexImage2D of a depth format (shadow maps).
+  to the window at swap, or drawn through the gamma ramp when one is set; the
+  depth texture answers glReadPixels(GL_DEPTH_COMPONENT) (flare and sun probes)
+  and glCopyTexImage2D of a depth format (shadow maps).
 =============================================================================*/
 #include "gles_internal.h"
 
-static GLuint sSceneFBO, sSceneColor, sSceneDepth;   // colour renderbuffer, depth-stencil texture
+static GLuint sSceneFBO, sSceneColor, sSceneDepth;   // colour and depth-stencil textures
 static int sSceneW, sSceneH;
 
 // The scene renders at FARCRY_RENDER_SIZE=WxH, or at FARCRY_RENDER_SCALE (0.25-1) of the window, never
@@ -35,7 +36,7 @@ static GLuint sScratchFBO;
 static void DestroyScene()
 {
   if (sSceneFBO) es_glDeleteFramebuffers(1, &sSceneFBO);
-  if (sSceneColor) es_glDeleteRenderbuffers(1, &sSceneColor);
+  if (sSceneColor) es_glDeleteTextures(1, &sSceneColor);
   if (sSceneDepth) es_glDeleteTextures(1, &sSceneDepth);
   sSceneFBO = sSceneColor = sSceneDepth = 0;
 }
@@ -45,11 +46,16 @@ bool GLES_SceneFBOEnsure(int w, int h)
   if (sSceneFBO && w == sSceneW && h == sSceneH) return true;
   DestroyScene();
   if (w < 1 || h < 1) return false;
-  es_glGenRenderbuffers(1, &sSceneColor);
-  es_glBindRenderbuffer(ES_RENDERBUFFER, sSceneColor);
-  es_glRenderbufferStorage(ES_RENDERBUFFER, ES_RGBA8, w, h);
-  es_glGenTextures(1, &sSceneDepth);
   es_glActiveTexture(ES_TEXTURE0 + GLES_SCRATCH_UNIT);
+  // A texture, not a renderbuffer, so the swap can sample it through the gamma ramp.
+  es_glGenTextures(1, &sSceneColor);
+  es_glBindTexture(GL_TEXTURE_2D, sSceneColor);
+  es_glTexImage2D(GL_TEXTURE_2D, 0, ES_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+  es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  es_glGenTextures(1, &sSceneDepth);
   es_glBindTexture(GL_TEXTURE_2D, sSceneDepth);
   es_glTexImage2D(GL_TEXTURE_2D, 0, ES_DEPTH24_STENCIL8, w, h, 0, ES_DEPTH_STENCIL, ES_UNSIGNED_INT_24_8, NULL);
   es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -60,7 +66,7 @@ bool GLES_SceneFBOEnsure(int w, int h)
   es_glActiveTexture(ES_TEXTURE0 + GLES_NativeActiveUnit());
   es_glGenFramebuffers(1, &sSceneFBO);
   es_glBindFramebuffer(ES_FRAMEBUFFER, sSceneFBO);
-  es_glFramebufferRenderbuffer(ES_FRAMEBUFFER, ES_COLOR_ATTACHMENT0, ES_RENDERBUFFER, sSceneColor);
+  es_glFramebufferTexture2D(ES_FRAMEBUFFER, ES_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sSceneColor, 0);
   es_glFramebufferTexture2D(ES_FRAMEBUFFER, ES_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, sSceneDepth, 0);
   GLenum status = es_glCheckFramebufferStatus(ES_FRAMEBUFFER);
   if (status != ES_FRAMEBUFFER_COMPLETE)
@@ -76,6 +82,127 @@ bool GLES_SceneFBOEnsure(int w, int h)
   es_glScissor(0, 0, w, h);
   GLES_Log("GLES: scene framebuffer %dx%d", w, h);
   return true;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// Gamma: the renderer's ramp (r_Gamma, r_Brightness, r_Contrast and the scripts' gamma delta) went to
+// the display on Windows. ES has none, so the swap draws the scene through it as a 256-entry lookup.
+//////////////////////////////////////////////////////////////////////////
+
+static GLubyte sRamp[256 * 4];
+static bool sRampIdentity = true, sRampDirty;
+static GLuint sGammaProg, sRampTex;
+static bool sGammaProgFailed;
+
+static const char* sGammaVS =
+  "#version 300 es\n"
+  "out vec2 v_uv;\n"
+  "void main() {\n"
+  "  vec2 p = vec2(float((gl_VertexID & 1) * 4 - 1), float((gl_VertexID & 2) * 2 - 1));\n"
+  "  v_uv = p * 0.5 + 0.5;\n"
+  "  gl_Position = vec4(p, 0.0, 1.0);\n"
+  "}\n";
+static const char* sGammaFS =
+  "#version 300 es\n"
+  "precision highp float; precision highp int;\n"
+  "uniform sampler2D u_scene; uniform sampler2D u_ramp;\n"
+  "in vec2 v_uv; out vec4 o;\n"
+  "void main() {\n"
+  "  ivec3 i = ivec3(texture(u_scene, v_uv).rgb * 255.0 + 0.5);\n"
+  "  o = vec4(texelFetch(u_ramp, ivec2(i.r, 0), 0).r, texelFetch(u_ramp, ivec2(i.g, 0), 0).g, texelFetch(u_ramp, ivec2(i.b, 0), 0).b, 1.0);\n"
+  "}\n";
+
+void GLES_SetGammaRamp(const unsigned short* r, const unsigned short* g, const unsigned short* b)
+{
+  bool identity = true;
+  for (int i = 0; i < 256; i++)
+  {
+    GLubyte* p = &sRamp[i * 4];
+    p[0] = (GLubyte)((r[i] * 255 + 32767) / 65535);
+    p[1] = (GLubyte)((g[i] * 255 + 32767) / 65535);
+    p[2] = (GLubyte)((b[i] * 255 + 32767) / 65535);
+    p[3] = 255;
+    identity = identity && p[0] == i && p[1] == i && p[2] == i;
+  }
+  sRampIdentity = identity;
+  sRampDirty = true;
+}
+
+static bool BuildGammaProgram()
+{
+  if (sGammaProg) return true;
+  if (sGammaProgFailed) return false;
+  GLuint vs = es_glCreateShader(ES_VERTEX_SHADER), fs = es_glCreateShader(ES_FRAGMENT_SHADER);
+  es_glShaderSource(vs, 1, &sGammaVS, NULL); es_glCompileShader(vs);
+  es_glShaderSource(fs, 1, &sGammaFS, NULL); es_glCompileShader(fs);
+  GLuint prog = es_glCreateProgram();
+  es_glAttachShader(prog, vs); es_glAttachShader(prog, fs);
+  es_glLinkProgram(prog);
+  es_glDeleteShader(vs); es_glDeleteShader(fs);
+  GLint ok = 0;
+  es_glGetProgramiv(prog, ES_LINK_STATUS, &ok);
+  if (!ok)
+  {
+    char log[1024];
+    es_glGetProgramInfoLog(prog, sizeof(log), NULL, log);
+    GLES_Log("GLES: gamma program failed to link: %s", log);
+    es_glDeleteProgram(prog);
+    sGammaProgFailed = true;
+    return false;
+  }
+  es_glUseProgram(prog);
+  es_glUniform1i(es_glGetUniformLocation(prog, "u_scene"), GLES_SCRATCH_UNIT);
+  es_glUniform1i(es_glGetUniformLocation(prog, "u_ramp"), GLES_RAMP_UNIT);
+  es_glUseProgram(GLES_CurrentProgram());
+  sGammaProg = prog;
+  return true;
+}
+
+// Draw the scene into the bound window rect through the ramp; the caller has the scissor off.
+static void DrawSceneThroughRamp(int x0, int y0, int x1, int y1)
+{
+  GLint vp[4];
+  GLboolean mask[4];
+  es_glGetIntegerv(GL_VIEWPORT, vp);
+  es_glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+  static const GLenum caps[] = { GL_DEPTH_TEST, GL_STENCIL_TEST, GL_BLEND, GL_CULL_FACE };
+  bool was[4];
+  for (int i = 0; i < 4; i++) { was[i] = es_glIsEnabled(caps[i]) != 0; if (was[i]) es_glDisable(caps[i]); }
+
+  es_glActiveTexture(ES_TEXTURE0 + GLES_RAMP_UNIT);
+  if (!sRampTex)
+  {
+    es_glGenTextures(1, &sRampTex);
+    es_glBindTexture(GL_TEXTURE_2D, sRampTex);
+    es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    es_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    sRampDirty = true;
+  }
+  es_glBindTexture(GL_TEXTURE_2D, sRampTex);
+  if (sRampDirty)
+  {
+    es_glTexImage2D(GL_TEXTURE_2D, 0, ES_RGBA8, 256, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, sRamp);
+    sRampDirty = false;
+  }
+  es_glActiveTexture(ES_TEXTURE0 + GLES_SCRATCH_UNIT);
+  es_glBindTexture(GL_TEXTURE_2D, sSceneColor);
+  es_glViewport(x0, y0, x1 - x0, y1 - y0);
+  es_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  es_glUseProgram(sGammaProg);
+  GLES_SuspendAttribArrays(true);
+  es_glDrawArrays(GL_TRIANGLES, 0, 3);
+  GLES_SuspendAttribArrays(false);
+
+  es_glBindTexture(GL_TEXTURE_2D, 0);
+  es_glActiveTexture(ES_TEXTURE0 + GLES_RAMP_UNIT);
+  es_glBindTexture(GL_TEXTURE_2D, 0);
+  es_glActiveTexture(ES_TEXTURE0 + GLES_NativeActiveUnit());
+  es_glUseProgram(GLES_CurrentProgram());
+  es_glViewport(vp[0], vp[1], vp[2], vp[3]);
+  es_glColorMask(mask[0], mask[1], mask[2], mask[3]);
+  for (int i = 0; i < 4; i++) if (was[i]) es_glEnable(caps[i]);
 }
 
 void GLES_SwapWindow(SDL_Window* win)
@@ -114,8 +241,16 @@ void GLES_SwapWindow(SDL_Window* win)
       es_glColorMask(mask[0], mask[1], mask[2], mask[3]);
       es_glClearColor(clear[0], clear[1], clear[2], clear[3]);
     }
-    bool same = sSceneW == x1 - x0 && sSceneH == y1 - y0;
-    es_glBlitFramebuffer(0, 0, sSceneW, sSceneH, x0, y0, x1, y1, GL_COLOR_BUFFER_BIT, same ? GL_NEAREST : GL_LINEAR);
+    if (!sRampIdentity && BuildGammaProgram())
+    {
+      es_glBindFramebuffer(ES_FRAMEBUFFER, 0);
+      DrawSceneThroughRamp(x0, y0, x1, y1);
+    }
+    else
+    {
+      bool same = sSceneW == x1 - x0 && sSceneH == y1 - y0;
+      es_glBlitFramebuffer(0, 0, sSceneW, sSceneH, x0, y0, x1, y1, GL_COLOR_BUFFER_BIT, same ? GL_NEAREST : GL_LINEAR);
+    }
     // If the surface still has alpha, the compositor honours it (macOS/ANGLE, Android): the sky
     // pass leaves alpha 0 and shows black on screen while screenshots look fine. Write alpha 1.
     static int alphaBits = -1;
