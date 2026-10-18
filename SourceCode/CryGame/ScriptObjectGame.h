@@ -220,6 +220,9 @@ private: // --------------------------------------------------------------------
 	std::vector<IScriptObject*>		m_pPlayersPool;	//!< This is pool of script objects passed back on request for players in radius.
 	
 	float													m_fLastServerRefresh; //! to avoid calling refresh server when getting UBI IP
+#if defined(LINUX)
+	string												m_sRunningDriver;			//!< r_Driver at startup; the menu cannot change it here
+#endif
 
 	bool _GetProfileFileNames( IFunctionHandler *pH, string &outSystem, string &outGame, const char *insCallerName );
 

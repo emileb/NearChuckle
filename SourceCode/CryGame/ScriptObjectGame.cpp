@@ -87,6 +87,10 @@ void CScriptObjectGame::Init(IScriptSystem *pScriptSystem,CXGame *pGame)
 	m_pSystem=pGame->GetSystem();
 	m_pConsole=m_pSystem->GetIConsole();
 	m_pRenderer=m_pSystem->GetIRenderer();
+#if defined(LINUX)
+	if (ICVar *pDriver=m_pConsole->GetCVar("r_Driver"))
+		m_sRunningDriver=pDriver->GetString();
+#endif
 	m_p3DEngine=m_pSystem->GetI3DEngine();
 	m_pEntitySystem=m_pSystem->GetIEntitySystem();
 	m_pPhysicalWorld=m_pSystem->GetIPhysicalWorld();
@@ -2953,6 +2957,19 @@ int CScriptObjectGame::SendMessage(IFunctionHandler *pH)
 	CHECK_PARAMETERS(1);
 	const char *pszMsg;
 	pH->GetParam(1, pszMsg);
+
+#if defined(LINUX)
+	// Outside Windows a relaunch only exits. The video menu asks for one after a renderer change
+	// (not allowed: put the running one back) or VSync (applied live), so ignore it.
+	if(pszMsg && stricmp(pszMsg,"Relaunch")==0)
+	{
+		ICVar *pDriver=m_pConsole->GetCVar("r_Driver");
+		if (pDriver && !m_sRunningDriver.empty() && stricmp(pDriver->GetString(),m_sRunningDriver.c_str())!=0)
+			pDriver->Set(m_sRunningDriver.c_str());
+		m_pSystem->GetILog()->Log("Relaunch request ignored; renderer stays %s", m_sRunningDriver.c_str());
+		return pH->EndFunction();
+	}
+#endif
 
 	if(pszMsg)
 		m_pGame->SendMessage(pszMsg);

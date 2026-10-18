@@ -1292,6 +1292,27 @@ int CGLRenderer::EnumAAFormats(TArray<SAAFormat>& Formats, bool bReset)
   return 0;
 }
 
+#ifndef WIN32
+// The video menu's Apply takes a current size missing from the list for a mode change and reloads the UI.
+static void AddCurrentDisplayFormat(TArray<SDispFormat>& Formats)
+{
+  ICVar *pWidth = iConsole->GetCVar("r_Width");
+  ICVar *pHeight = iConsole->GetCVar("r_Height");
+  if (!pWidth || !pHeight)
+    return;
+  for (int j=0; j<Formats.Num(); j++)
+  {
+    if (Formats[j].m_Width == pWidth->GetIVal() && Formats[j].m_Height == pHeight->GetIVal())
+      return;
+  }
+  SDispFormat frm;
+  frm.m_Width = pWidth->GetIVal();
+  frm.m_Height = pHeight->GetIVal();
+  frm.m_BPP = 32;
+  Formats.AddElem(frm);
+}
+#endif
+
 int CGLRenderer::EnumDisplayFormats(TArray<SDispFormat>& Formats, bool bReset)
 {
   SDispFormat frm;
@@ -1339,6 +1360,9 @@ int CGLRenderer::EnumDisplayFormats(TArray<SDispFormat>& Formats, bool bReset)
     }
 #endif
   }
+#ifndef WIN32
+  AddCurrentDisplayFormat(Formats);
+#endif
   return Formats.Num();
 }
 
